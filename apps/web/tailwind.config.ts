@@ -1,6 +1,8 @@
 import type { Config } from "tailwindcss";
+import animate from "tailwindcss-animate";
 
 const config: Config = {
+  darkMode: ["class"],
   content: [
     "./app/**/*.{ts,tsx}",
     "./components/**/*.{ts,tsx}",
@@ -9,14 +11,54 @@ const config: Config = {
   theme: {
     extend: {
       borderRadius: {
+        lg: "var(--radius)",
+        md: "calc(var(--radius) - 2px)",
+        sm: "calc(var(--radius) - 4px)",
         panel: "8px",
       },
       colors: {
+        background: "var(--color-canvas)",
+        foreground: "var(--color-ink)",
+        border: "var(--color-line)",
+        input: "var(--color-line)",
+        ring: "var(--color-teal)",
+        destructive: {
+          DEFAULT: "var(--color-rust)",
+          foreground: "#ffffff",
+        },
+        primary: {
+          DEFAULT: "var(--color-teal)",
+          foreground: "#ffffff",
+        },
+        secondary: {
+          DEFAULT: "var(--color-panel)",
+          foreground: "var(--color-ink)",
+        },
+        muted: {
+          DEFAULT: "var(--color-muted)",
+          foreground: "var(--color-muted)",
+        },
+        accent: {
+          DEFAULT: "var(--color-panel)",
+          foreground: "var(--color-ink)",
+        },
+        popover: {
+          DEFAULT: "var(--color-panel)",
+          foreground: "var(--color-ink)",
+        },
+        card: {
+          DEFAULT: "var(--color-panel)",
+          foreground: "var(--color-ink)",
+        },
         canvas: "var(--color-canvas)",
         ink: "var(--color-ink)",
-        muted: "var(--color-muted)",
         line: "var(--color-line)",
         panel: "var(--color-panel)",
+        rail: "var(--color-rail)",
+        surface: "var(--color-surface)",
+        modelblue: "var(--color-blue)",
+        bluesoft: "var(--color-blue-soft)",
+        violetsoft: "var(--color-violet-soft)",
         teal: "var(--color-teal)",
         rust: "var(--color-rust)",
         brass: "var(--color-brass)",
@@ -30,7 +72,7 @@ const config: Config = {
       },
     },
   },
-  plugins: [],
+  plugins: [animate],
 };
 
 export default config;

@@ -1,5 +1,7 @@
-import { Activity, LogOut, PlugZap } from "lucide-react";
+import { Activity, Boxes, ChevronRight, LogOut, PlugZap, Sparkles } from "lucide-react";
 import Link from "next/link";
+import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import { logoutAction } from "../app/actions";
 
 const navItems = [
@@ -26,14 +28,19 @@ export function AppShell({
 }) {
   return (
     <div className="min-h-screen">
-      <div className="mx-auto flex min-h-screen w-full max-w-7xl border-x border-line/80 bg-panel/72">
-        <aside className="hidden w-64 shrink-0 border-r border-line/80 bg-[#f6f8f1]/82 px-4 py-5 md:block">
-          <div className="mb-8">
-            <div className="text-xs uppercase tracking-[0.18em] text-muted">Agent Gateway</div>
-            <div className="mt-2 text-xl font-semibold text-ink">控制台</div>
-          </div>
+      <header className="sticky top-0 z-30 border-b border-line/80 bg-white/86 backdrop-blur-xl">
+        <div className="mx-auto flex h-16 w-full max-w-7xl items-center justify-between px-4 md:px-6">
+          <Link href="/" className="flex items-center gap-3">
+            <div className="platform-gradient grid h-10 w-10 place-items-center rounded-panel text-white shadow-lg shadow-modelblue/20">
+              <Sparkles className="h-5 w-5" aria-hidden="true" />
+            </div>
+            <div>
+              <div className="text-sm font-semibold text-ink">Agent Gateway</div>
+              <div className="text-xs text-muted">AI Agent Console</div>
+            </div>
+          </Link>
 
-          <nav className="space-y-1">
+          <nav className="hidden items-center gap-1 rounded-full border border-line bg-surface p-1 md:flex">
             {navItems.map((item) => {
               const Icon = item.icon;
               const isActive = active === item.id;
@@ -41,11 +48,12 @@ export function AppShell({
                 <Link
                   key={item.href}
                   href={item.href}
-                  className={`flex h-10 items-center gap-2 rounded-panel px-3 text-sm font-medium transition ${
+                  className={cn(
+                    "inline-flex h-9 items-center gap-2 rounded-full px-4 text-sm font-medium transition",
                     isActive
-                      ? "bg-ink text-white"
-                      : "text-muted hover:bg-white hover:text-ink hover:shadow-hairline"
-                  }`}
+                      ? "bg-white text-modelblue shadow-sm shadow-modelblue/10"
+                      : "text-muted hover:bg-white/70 hover:text-ink",
+                  )}
                 >
                   <Icon className="h-4 w-4" aria-hidden="true" />
                   {item.label}
@@ -54,56 +62,44 @@ export function AppShell({
             })}
           </nav>
 
-          <form action={logoutAction} className="mt-8">
-            <button
-              type="submit"
-              className="flex h-10 w-full items-center gap-2 rounded-panel px-3 text-sm font-medium text-muted transition hover:bg-white hover:text-rust hover:shadow-hairline"
-            >
-              <LogOut className="h-4 w-4" aria-hidden="true" />
-              退出登录
-            </button>
-          </form>
-        </aside>
-
-        <main className="flex min-w-0 flex-1 flex-col">
-          <header className="flex min-h-16 items-center justify-between border-b border-line/80 bg-panel/82 px-4 md:px-7">
-            <div className="md:hidden">
-              <div className="text-sm font-semibold">Agent Gateway</div>
-              <div className="text-xs text-muted">控制台</div>
+          <div className="flex items-center gap-2">
+            <div className="hidden items-center gap-2 rounded-full border border-line bg-white px-3 py-1.5 text-xs text-muted lg:flex">
+              <Boxes className="h-3.5 w-3.5 text-teal" aria-hidden="true" />
+              Admin API
+              <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
             </div>
-            <nav className="flex gap-2 md:hidden">
-              {navItems.map((item) => {
-                const Icon = item.icon;
-                const isActive = active === item.id;
-                return (
-                  <Link
-                    key={item.href}
-                    href={item.href}
-                    aria-label={item.label}
-                    className={`grid h-9 w-9 place-items-center rounded-panel border ${
-                      isActive ? "border-ink bg-ink text-white" : "border-line bg-white text-muted"
-                    }`}
-                  >
-                    <Icon className="h-4 w-4" aria-hidden="true" />
-                  </Link>
-                );
-              })}
-            </nav>
-            <form action={logoutAction} className="hidden md:block">
-              <button
-                type="submit"
-                className="inline-flex h-9 items-center gap-2 rounded-panel border border-line bg-white px-3 text-sm font-medium text-muted transition hover:border-rust hover:text-rust"
-              >
+            <form action={logoutAction}>
+              <Button className="h-9" type="submit" variant="outline">
                 <LogOut className="h-4 w-4" aria-hidden="true" />
-                退出
-              </button>
+                <span className="hidden sm:inline">退出</span>
+              </Button>
             </form>
-          </header>
+          </div>
+        </div>
+        <nav className="mx-auto flex h-12 w-full max-w-7xl items-center gap-2 overflow-x-auto border-t border-line/70 px-4 md:hidden">
+          {navItems.map((item) => {
+            const Icon = item.icon;
+            const isActive = active === item.id;
+            return (
+              <Link
+                key={item.href}
+                href={item.href}
+                className={cn(
+                  "inline-flex h-8 shrink-0 items-center gap-2 rounded-full px-3 text-sm font-medium",
+                  isActive ? "bg-modelblue text-white" : "bg-white text-muted",
+                )}
+              >
+                <Icon className="h-4 w-4" aria-hidden="true" />
+                {item.label}
+              </Link>
+            );
+          })}
+        </nav>
+      </header>
 
-          <div className="flex-1 px-4 py-6 md:px-7 md:py-7">{children}</div>
-        </main>
-      </div>
+      <main className="mx-auto min-h-[calc(100vh-4rem)] w-full max-w-7xl px-4 py-6 md:px-6 md:py-8">
+        {children}
+      </main>
     </div>
   );
 }
-

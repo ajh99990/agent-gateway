@@ -3,14 +3,19 @@
 @tailwind utilities;
 
 :root {
-  --color-canvas: #eef1ed;
-  --color-panel: #fbfcf7;
-  --color-ink: #202822;
-  --color-muted: #667067;
-  --color-line: #c9d2c8;
-  --color-teal: #176960;
-  --color-rust: #a9472f;
-  --color-brass: #9a6b22;
+  --color-canvas: #f4f7ff;
+  --color-panel: #ffffff;
+  --color-ink: #101828;
+  --color-muted: #667085;
+  --color-line: #e4e9f5;
+  --color-teal: #00a6a6;
+  --color-rust: #ef4f5f;
+  --color-brass: #7c5cff;
+  --color-blue: #2f6bff;
+  --color-blue-soft: #eaf1ff;
+  --color-violet-soft: #f0edff;
+  --color-surface: #f8fbff;
+  --radius: 8px;
   --font-body: "Aptos", "IBM Plex Sans", "Segoe UI", sans-serif;
   --font-mono: "JetBrains Mono", "SF Mono", "Menlo", monospace;
 }
@@ -29,11 +34,17 @@ body {
   margin: 0;
   color: var(--color-ink);
   background:
-    linear-gradient(90deg, rgba(32, 40, 34, 0.035) 1px, transparent 1px),
-    linear-gradient(rgba(32, 40, 34, 0.028) 1px, transparent 1px),
+    linear-gradient(180deg, rgba(47, 107, 255, 0.08), transparent 360px),
+    linear-gradient(90deg, rgba(47, 107, 255, 0.055) 1px, transparent 1px),
+    linear-gradient(rgba(47, 107, 255, 0.045) 1px, transparent 1px),
     var(--color-canvas);
-  background-size: 28px 28px;
+  background-size: auto, 36px 36px, 36px 36px;
   font-family: var(--font-body);
+}
+
+body::selection {
+  color: #ffffff;
+  background: var(--color-teal);
 }
 
 button,
@@ -41,8 +52,28 @@ input {
   font: inherit;
 }
 
-::selection {
-  color: #ffffff;
-  background: var(--color-teal);
+@layer utilities {
+  .surface-panel {
+    border: 1px solid rgba(228, 233, 245, 0.98);
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(248, 251, 255, 0.96)),
+      var(--color-panel);
+    box-shadow:
+      0 20px 50px rgba(47, 72, 125, 0.08),
+      inset 0 1px 0 rgba(255, 255, 255, 0.95);
+  }
+
+  .platform-gradient {
+    background:
+      linear-gradient(135deg, rgba(47, 107, 255, 0.96), rgba(0, 166, 166, 0.88) 54%, rgba(124, 92, 255, 0.92)),
+      #2f6bff;
+  }
+
+  .mesh-band {
+    background:
+      linear-gradient(120deg, rgba(47, 107, 255, 0.14), transparent 34%),
+      linear-gradient(280deg, rgba(0, 166, 166, 0.12), transparent 30%),
+      linear-gradient(180deg, #ffffff, #f8fbff);
+  }
 }
 

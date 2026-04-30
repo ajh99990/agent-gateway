@@ -1,22 +1,8 @@
 "use server";
 
 import { redirect } from "next/navigation";
-import { clearSession, createSession, requireSession } from "../lib/auth";
-import { getRequiredEnv } from "../lib/env";
+import { clearSession, requireSession } from "../lib/auth";
 import { setSessionPluginEnabled } from "../lib/gateway-client";
-import { verifyPassword } from "../lib/password";
-
-export async function loginAction(formData: FormData): Promise<void> {
-  const password = String(formData.get("password") ?? "");
-  const storedHash = getRequiredEnv("WEB_ADMIN_PASSWORD_HASH");
-  const ok = await verifyPassword(password, storedHash);
-  if (!ok) {
-    redirect("/login?error=invalid");
-  }
-
-  await createSession();
-  redirect("/");
-}
 
 export async function logoutAction(): Promise<void> {
   await clearSession();

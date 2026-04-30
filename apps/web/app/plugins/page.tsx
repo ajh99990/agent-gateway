@@ -1,8 +1,12 @@
-import { PlugZap, Power, PowerOff, Search } from "lucide-react";
-import { setPluginStateAction } from "../actions";
+import { CircleAlert, Compass, PlugZap, Search as SearchIcon, Sparkles } from "lucide-react";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { AppShell } from "../../components/app-shell";
+import { RegisteredPluginsTable, SessionPluginsTable } from "../../components/plugin-tables";
 import { StatusPill } from "../../components/status-pill";
-import { getPlugins, getSessionPlugins, type SessionPluginState } from "../../lib/gateway-client";
+import { getPlugins, getSessionPlugins } from "../../lib/gateway-client";
 import { requireSession } from "../../lib/auth";
 
 export default async function PluginsPage({
@@ -17,162 +21,133 @@ export default async function PluginsPage({
 
   const pluginsResult = await getPlugins();
   const sessionResult = sessionId ? await getSessionPlugins(sessionId) : undefined;
+  const plugins = pluginsResult.data?.plugins ?? [];
 
   return (
     <AppShell active="plugins">
-      <div className="mb-6 flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
-        <div>
-          <div className="text-xs uppercase tracking-[0.18em] text-muted">Plugins</div>
-          <h1 className="mt-2 text-3xl font-semibold text-ink">插件管理</h1>
+      <section className="mb-6 overflow-hidden rounded-panel border border-line bg-white shadow-xl shadow-modelblue/5">
+        <div className="mesh-band p-5 md:p-8">
+          <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
+            <div>
+              <div className="inline-flex items-center gap-2 rounded-full border border-line bg-white px-3 py-1 text-xs font-medium text-modelblue shadow-sm">
+                <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
+                Plugin Hub
+              </div>
+              <h1 className="mt-5 max-w-3xl text-4xl font-semibold leading-tight text-ink md:text-5xl">
+                插件资源中心
+              </h1>
+              <p className="mt-3 max-w-2xl text-sm leading-6 text-muted md:text-base">
+                像浏览模型资源一样管理 Agent 能力，按群加载、启用或关闭插件能力。
+              </p>
+            </div>
+            <StatusPill tone={pluginsResult.data ? "good" : "warn"}>
+              {pluginsResult.data ? "Admin API 已连接" : "Admin API 异常"}
+            </StatusPill>
+          </div>
         </div>
-        <StatusPill tone={pluginsResult.data ? "good" : "warn"}>
-          {pluginsResult.data ? "Admin API 已连接" : "Admin API 异常"}
-        </StatusPill>
-      </div>
-
-      {pluginsResult.error || error ? (
-        <div className="mb-5 rounded-panel border border-rust/25 bg-rust/10 px-4 py-3 text-sm text-rust">
-          {pluginsResult.error ?? error}
-        </div>
-      ) : null}
-
-      <section className="mb-5 border border-line bg-panel p-4 shadow-hairline">
-        <div className="mb-4 flex items-center gap-2">
-          <Search className="h-4 w-4 text-teal" aria-hidden="true" />
-          <h2 className="text-base font-semibold text-ink">选择群会话</h2>
-        </div>
-        <form className="flex flex-col gap-3 md:flex-row" action="/plugins">
-          <input
-            name="sessionId"
-            defaultValue={sessionId}
-            placeholder="56594698995@chatroom"
-            className="h-10 min-w-0 flex-1 rounded-panel border border-line bg-white px-3 font-mono text-sm text-ink outline-none transition focus:border-teal focus:ring-2 focus:ring-teal/15"
+        <div className="grid border-t border-line bg-white px-5 py-4 text-xs md:grid-cols-3">
+          <HeaderDatum label="Registered" value={String(plugins.length)} />
+          <HeaderDatum label="Session" value={sessionId || "未选择"} />
+          <HeaderDatum
+            label="Loaded"
+            value={sessionResult?.data ? String(sessionResult.data.plugins.length) : "-"}
           />
-          <button
-            type="submit"
-            className="inline-flex h-10 items-center justify-center gap-2 rounded-panel bg-ink px-4 text-sm font-semibold text-white transition hover:bg-teal"
-          >
-            <Search className="h-4 w-4" aria-hidden="true" />
-            查看
-          </button>
-        </form>
+        </div>
       </section>
 
+      {pluginsResult.error || error ? (
+        <Alert className="mb-5" variant="destructive">
+          <CircleAlert className="h-4 w-4" aria-hidden="true" />
+          <AlertDescription>{pluginsResult.error ?? error}</AlertDescription>
+        </Alert>
+      ) : null}
+
+      <Card className="mb-5 overflow-hidden bg-white">
+        <CardHeader className="border-b border-line/80 bg-white">
+          <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+            <CardTitle className="inline-flex items-center gap-2">
+              <SearchIcon className="h-4 w-4 text-teal" aria-hidden="true" />
+              选择群会话
+            </CardTitle>
+            <div className="font-mono text-xs text-muted">sessionId</div>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <form className="flex flex-col gap-3 md:flex-row" action="/plugins">
+            <div className="relative min-w-0 flex-1">
+              <SearchIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" />
+              <Input
+                className="font-mono pl-9"
+                name="sessionId"
+                defaultValue={sessionId}
+                placeholder="56594698995@chatroom"
+              />
+            </div>
+            <Button type="submit">
+              <SearchIcon className="h-4 w-4" aria-hidden="true" />
+              查看
+            </Button>
+          </form>
+        </CardContent>
+      </Card>
+
       <div className="grid gap-5 xl:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
-        <section className="border border-line bg-panel p-4 shadow-hairline">
-          <div className="mb-4 flex items-center gap-2">
-            <PlugZap className="h-4 w-4 text-brass" aria-hidden="true" />
-            <h2 className="text-base font-semibold text-ink">已注册插件</h2>
-          </div>
-          <div className="divide-y divide-line border border-line bg-white">
-            {(pluginsResult.data?.plugins ?? []).map((plugin) => (
-              <div key={plugin.id} className="p-3">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <div className="font-medium text-ink">{plugin.name}</div>
-                    <div className="mt-1 font-mono text-xs text-muted">{plugin.id}</div>
-                  </div>
-                  <StatusPill tone={plugin.system ? "idle" : "good"}>
-                    {plugin.system ? "系统" : "业务"}
-                  </StatusPill>
-                </div>
-                <div className="mt-3 flex flex-wrap gap-1.5">
-                  {plugin.keywords.map((keyword) => (
-                    <span
-                      key={keyword}
-                      className="rounded-full border border-line bg-[#f7f8f2] px-2 py-0.5 text-xs text-muted"
-                    >
-                      {keyword}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
-        </section>
+        <Card className="overflow-hidden bg-white">
+          <CardHeader className="border-b border-line/80 bg-white">
+            <CardTitle className="inline-flex items-center gap-2">
+              <Compass className="h-4 w-4 text-modelblue" aria-hidden="true" />
+              插件广场
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <RegisteredPluginsTable plugins={plugins} />
+          </CardContent>
+        </Card>
 
-        <section className="border border-line bg-panel p-4 shadow-hairline">
-          <div className="mb-4 flex items-center justify-between gap-3">
+        <Card className="overflow-hidden bg-white">
+          <CardHeader className="flex-row items-start justify-between gap-3 space-y-0 border-b border-line/80 bg-white">
             <div>
-              <h2 className="text-base font-semibold text-ink">当前群插件状态</h2>
-              <div className="mt-1 font-mono text-xs text-muted">{sessionId || "未选择 sessionId"}</div>
+              <CardTitle className="inline-flex items-center gap-2">
+                <PlugZap className="h-4 w-4 text-brass" aria-hidden="true" />
+                当前群插件状态
+              </CardTitle>
+              <div className="mt-1 font-mono text-xs font-normal text-muted">
+                {sessionId || "未选择 sessionId"}
+              </div>
             </div>
-            {sessionResult?.data ? <StatusPill tone="good">已加载</StatusPill> : <StatusPill tone="idle">等待选择</StatusPill>}
-          </div>
+            {sessionResult?.data ? (
+              <StatusPill tone="good">已加载</StatusPill>
+            ) : (
+              <StatusPill tone="idle">等待选择</StatusPill>
+            )}
+          </CardHeader>
+          <CardContent>
+            {sessionResult?.error ? (
+              <Alert className="mb-4" variant="destructive">
+                <CircleAlert className="h-4 w-4" aria-hidden="true" />
+                <AlertDescription>{sessionResult.error}</AlertDescription>
+              </Alert>
+            ) : null}
 
-          {sessionResult?.error ? (
-            <div className="mb-4 rounded-panel border border-rust/25 bg-rust/10 px-4 py-3 text-sm text-rust">
-              {sessionResult.error}
-            </div>
-          ) : null}
-
-          {sessionResult?.data ? (
-            <div className="divide-y divide-line border border-line bg-white">
-              {sessionResult.data.plugins.map((plugin) => (
-                <SessionPluginRow key={plugin.id} sessionId={sessionId} plugin={plugin} />
-              ))}
-            </div>
-          ) : (
-            <div className="border border-dashed border-line bg-white px-4 py-10 text-center text-sm text-muted">
-              输入群 sessionId 后查看按群启停状态。
-            </div>
-          )}
-        </section>
+            {sessionResult?.data ? (
+              <SessionPluginsTable plugins={sessionResult.data.plugins} sessionId={sessionId} />
+            ) : (
+              <div className="rounded-panel border border-dashed border-line bg-surface px-4 py-12 text-center text-sm text-muted">
+                输入群 sessionId 后查看按群启停状态
+              </div>
+            )}
+          </CardContent>
+        </Card>
       </div>
     </AppShell>
   );
 }
 
-function SessionPluginRow({
-  sessionId,
-  plugin,
-}: {
-  sessionId: string;
-  plugin: SessionPluginState;
-}) {
+function HeaderDatum({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex flex-col gap-3 p-3 md:flex-row md:items-center md:justify-between">
-      <div>
-        <div className="flex items-center gap-2">
-          <span className="font-medium text-ink">{plugin.name}</span>
-          <StatusPill tone={plugin.enabled ? "good" : "warn"}>{plugin.enabled ? "已开启" : "已关闭"}</StatusPill>
-          {plugin.system ? <StatusPill tone="idle">系统</StatusPill> : null}
-        </div>
-        <div className="mt-1 font-mono text-xs text-muted">{plugin.id}</div>
-      </div>
-
-      <div className="flex gap-2">
-        <PluginButton sessionId={sessionId} plugin={plugin} enabled={true} />
-        <PluginButton sessionId={sessionId} plugin={plugin} enabled={false} />
-      </div>
+    <div className="min-w-0 border-b border-line/70 px-3 py-3 last:border-b-0 md:border-b-0 md:border-r md:last:border-r-0">
+      <div className="text-muted">{label}</div>
+      <div className="mt-1 truncate font-mono text-sm font-semibold text-ink">{value}</div>
     </div>
-  );
-}
-
-function PluginButton({
-  sessionId,
-  plugin,
-  enabled,
-}: {
-  sessionId: string;
-  plugin: SessionPluginState;
-  enabled: boolean;
-}) {
-  const Icon = enabled ? Power : PowerOff;
-  const disabled = !plugin.manageable || plugin.enabled === enabled;
-  return (
-    <form action={setPluginStateAction}>
-      <input type="hidden" name="sessionId" value={sessionId} />
-      <input type="hidden" name="pluginId" value={plugin.id} />
-      <input type="hidden" name="enabled" value={String(enabled)} />
-      <button
-        type="submit"
-        disabled={disabled}
-        className="inline-flex h-9 items-center gap-2 rounded-panel border border-line bg-white px-3 text-sm font-medium text-ink transition hover:border-teal hover:text-teal disabled:cursor-not-allowed disabled:opacity-40"
-      >
-        <Icon className="h-4 w-4" aria-hidden="true" />
-        {enabled ? "开启" : "关闭"}
-      </button>
-    </form>
   );
 }
