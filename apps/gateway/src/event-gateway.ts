@@ -2,6 +2,7 @@ import type { Logger } from "pino";
 import type { AppConfig } from "./config.js";
 import { AgentRuntimeClient } from "./agent-runtime-client.js";
 import { GraphitiClient } from "./graphiti-client.js";
+import { PluginRouter } from "./plugins/plugin-router.js";
 import { RedisStore } from "./redis-store.js";
 import { TaskQueue } from "./task-queue.js";
 import type {
@@ -19,11 +20,9 @@ import { WeFlowClient } from "./weflow-client.js";
 import {
   chooseTriggerReason,
   createRunId,
-  detectMention,
-  inferContentType,
   isBotSourceName,
   isGroupSession,
-  normalizeCreateTime,
+  normalizeWeFlowApiMessages,
 } from "./utils.js";
 
 const MAX_CONTEXT_MESSAGE_CHARS = 100;
@@ -56,6 +55,7 @@ export class EventGateway {
     private readonly weflowClient: WeFlowClient,
     private readonly agentRuntimeClient: AgentRuntimeClient,
     private readonly graphitiClient: GraphitiClient,
+    private readonly pluginRouter: PluginRouter,
   ) {
     this.graphitiQueue = new TaskQueue(2, logger, "graphiti");
   }
@@ -133,15 +133,15 @@ export class EventGateway {
    * handleIncomingEvent 是整个消息处理链路的第一站。
    *
    * 每当 WeFlow SSE 推来一条 `message.new`，都会先进入这里。
-   * 这里不做上下文补拉，也不直接调 agent-runtime，只做入口阶段的 4 件事：
+   * 这里不直接调 agent-runtime，只做入口阶段的几件事：
    *
    * 1. 过滤掉当前不关心的会话
    * 2. 用 Redis 按 messageKey 去重
-   * 3. 把事件塞进对应群的内存 accumulator
-   * 4. 为这个群安排或重置 quiet window
+   * 3. 先尝试走插件短路处理
+   * 4. 没有插件处理时，把事件塞进对应群的内存 accumulator
+   * 5. 为这个群安排或重置 quiet window
    */
   private async handleIncomingEvent(event: WeFlowSseMessageEvent): Promise<void> {
-    console.log("收到了吗？", event);
     if (this.config.groupOnly && !isGroupSession(event.sessionId)) {
       return;
     }
@@ -158,6 +158,11 @@ export class EventGateway {
     const isFirstSeen = await this.redis.claimSseMessageKey(event.messageKey);
     if (!isFirstSeen) {
       this.logger.debug({ messageKey: event.messageKey }, "忽略重复 SSE 事件");
+      return;
+    }
+
+    const handledByPlugin = await this.pluginRouter.tryHandle(event);
+    if (handledByPlugin) {
       return;
     }
 
@@ -574,40 +579,7 @@ export class EventGateway {
     groupName: string | undefined,
     messages: WeFlowApiMessage[],
   ): NormalizedMessage[] {
-    return [...messages]
-      .sort(sortByLocalId)
-      .map((message) => {
-        const createdAtUnixMs = normalizeCreateTime(message.createTime);
-        const senderId =
-          message.senderUsername?.trim() ||
-          (message.isSend ? this.config.botProfile.wechatIds[0] || this.config.botProfile.name : "unknown");
-        const content =
-          message.parsedContent ||
-          message.content ||
-          message.rawContent ||
-          `[${message.mediaType || "message"}]`;
-        const isSelfSent = message.isSend === 1;
-        const isFromBot = isSelfSent || this.config.botProfile.wechatIds.includes(senderId);
-
-        return {
-          sessionId,
-          groupName,
-          localId: message.localId,
-          serverId: message.serverId,
-          senderId,
-          senderName: senderId,
-          timestamp: new Date(createdAtUnixMs).toISOString(),
-          createdAtUnixMs,
-          content,
-          rawContent: message.rawContent || content,
-          contentType: inferContentType(message),
-          isGroup: isGroupSession(sessionId),
-          isSelfSent,
-          isFromBot,
-          isMentionBot: detectMention(content, this.config.botProfile),
-          fingerprint: `${sessionId}:${message.localId}`,
-        };
-      });
+    return normalizeWeFlowApiMessages(sessionId, groupName, messages, this.config.botProfile);
   }
 
   /**

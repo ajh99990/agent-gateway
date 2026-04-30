@@ -1,0 +1,48 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --color-canvas: #eef1ed;
+  --color-panel: #fbfcf7;
+  --color-ink: #202822;
+  --color-muted: #667067;
+  --color-line: #c9d2c8;
+  --color-teal: #176960;
+  --color-rust: #a9472f;
+  --color-brass: #9a6b22;
+  --font-body: "Aptos", "IBM Plex Sans", "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", "SF Mono", "Menlo", monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  min-height: 100%;
+  background: var(--color-canvas);
+}
+
+body {
+  min-height: 100%;
+  margin: 0;
+  color: var(--color-ink);
+  background:
+    linear-gradient(90deg, rgba(32, 40, 34, 0.035) 1px, transparent 1px),
+    linear-gradient(rgba(32, 40, 34, 0.028) 1px, transparent 1px),
+    var(--color-canvas);
+  background-size: 28px 28px;
+  font-family: var(--font-body);
+}
+
+button,
+input {
+  font: inherit;
+}
+
+::selection {
+  color: #ffffff;
+  background: var(--color-teal);
+}
+

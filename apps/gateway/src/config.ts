@@ -38,6 +38,14 @@ function parseCsv(value: string | undefined): string[] {
   );
 }
 
+function emptyStringToUndefined(value: unknown): unknown {
+  if (typeof value === "string" && value.trim() === "") {
+    return undefined;
+  }
+
+  return value;
+}
+
 /**
  * envSchema 负责在“进程刚启动、业务代码还没开始跑”时先把配置校验掉。
  *
@@ -51,6 +59,7 @@ const envSchema = z.object({
   GATEWAY_HOST: z.string().default("127.0.0.1"),
   GATEWAY_PORT: z.string().default("3400"),
   ENABLE_HEALTH_SERVER: z.string().optional(),
+  GATEWAY_ADMIN_TOKEN: z.string().optional(),
   REDIS_URL: z.string().default("redis://127.0.0.1:6479"),
   REDIS_KEY_PREFIX: z.string().default("wx:event-gateway"),
   SSE_DEDUPE_TTL_SECONDS: z.string().default("3600"),
@@ -71,10 +80,11 @@ const envSchema = z.object({
   BOT_NAME: z.string().default("bot"),
   BOT_ALIASES: z.string().optional(),
   BOT_WECHAT_IDS: z.string().optional(),
+  PLUGIN_ADMIN_WECHAT_IDS: z.string().optional(),
   AGENT_RUNTIME_URL: z.string().optional(),
   AGENT_RUNTIME_BEARER_TOKEN: z.string().optional(),
   AGENT_RUNTIME_TIMEOUT_MS: z.string().default("30000"),
-  GRAPHITI_MCP_URL: z.string().url().optional(),
+  GRAPHITI_MCP_URL: z.preprocess(emptyStringToUndefined, z.string().url().optional()),
   GRAPHITI_TIMEOUT_MS: z.string().default("5000"),
   GRAPHITI_GROUP_PREFIX: z.string().default("wechat:")
 });
@@ -94,6 +104,7 @@ export interface AppConfig {
   gatewayHost: string;
   gatewayPort: number;
   enableHealthServer: boolean;
+  gatewayAdminToken?: string;
   redisUrl: string;
   redisKeyPrefix: string;
   sseDedupeTtlSeconds: number;
@@ -112,6 +123,7 @@ export interface AppConfig {
   agentContextLimit: number;
   agentContextCharLimit: number;
   botProfile: BotProfile;
+  pluginAdminWechatIds: string[];
   agentRuntimeUrl?: string;
   agentRuntimeBearerToken?: string;
   agentRuntimeTimeoutMs: number;
@@ -134,6 +146,7 @@ export function loadConfig(): AppConfig {
   const env = envSchema.parse(process.env);
   const aliases = parseCsv(env.BOT_ALIASES);
   const wechatIds = parseCsv(env.BOT_WECHAT_IDS);
+  const pluginAdminWechatIds = parseCsv(env.PLUGIN_ADMIN_WECHAT_IDS);
 
   // 这里把主名字也并入 aliases，后面做 @mention 判断时就不用区分“主名”和“别名”。
   const botAliases = Array.from(new Set([env.BOT_NAME, ...aliases].filter(Boolean)));
@@ -144,6 +157,7 @@ export function loadConfig(): AppConfig {
     gatewayHost: env.GATEWAY_HOST,
     gatewayPort: parseInteger(env.GATEWAY_PORT, 3400),
     enableHealthServer: parseBoolean(env.ENABLE_HEALTH_SERVER, true),
+    gatewayAdminToken: env.GATEWAY_ADMIN_TOKEN?.trim() || undefined,
     redisUrl: env.REDIS_URL,
     redisKeyPrefix: env.REDIS_KEY_PREFIX,
     sseDedupeTtlSeconds: parseInteger(env.SSE_DEDUPE_TTL_SECONDS, 3600),
@@ -166,6 +180,7 @@ export function loadConfig(): AppConfig {
       aliases: botAliases,
       wechatIds,
     },
+    pluginAdminWechatIds,
     agentRuntimeUrl: env.AGENT_RUNTIME_URL?.trim() || undefined,
     agentRuntimeBearerToken: env.AGENT_RUNTIME_BEARER_TOKEN?.trim() || undefined,
     agentRuntimeTimeoutMs: parseInteger(env.AGENT_RUNTIME_TIMEOUT_MS, 30000),

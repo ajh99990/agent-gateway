@@ -1,27 +1,21 @@
 {
-  "name": "event-gateway",
-  "version": "0.1.0",
+  "name": "agent-gateway-monorepo",
   "private": true,
-  "type": "module",
-  "description": "Host-side event gateway for WeFlow -> LangGraph agent runtime.",
+  "packageManager": "pnpm@10.32.1",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "dev": "tsx watch src/index.ts",
-    "start": "tsx src/index.ts",
-    "import:history": "tsx src/scripts/import-history.ts",
-    "import:persona-seed": "tsx src/scripts/import-persona-seed.ts"
-  },
-  "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0",
-    "dotenv": "^17.2.3",
-    "ioredis": "^5.8.1",
-    "pino": "^9.12.0",
-    "zod": "^4.2.1"
+    "init:env": "tsx scripts/init-env.ts",
+    "build": "pnpm -r build",
+    "gateway:build": "pnpm --filter @agent-gateway/gateway build",
+    "gateway:dev": "pnpm --filter @agent-gateway/gateway dev",
+    "gateway:start": "pnpm --filter @agent-gateway/gateway start",
+    "gateway:import:history": "pnpm --filter @agent-gateway/gateway import:history",
+    "gateway:import:persona-seed": "pnpm --filter @agent-gateway/gateway import:persona-seed",
+    "web:build": "pnpm --filter @agent-gateway/web build",
+    "web:dev": "pnpm --filter @agent-gateway/web dev",
+    "web:start": "pnpm --filter @agent-gateway/web start",
+    "web:hash-password": "pnpm --filter @agent-gateway/web hash-password"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0",
-    "tsx": "^4.19.0",
-    "typescript": "^5.9.3"
-  },
-  "packageManager": "pnpm@10.32.1"
+    "tsx": "^4.21.0"
+  }
 }

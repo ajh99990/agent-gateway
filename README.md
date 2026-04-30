@@ -1,75 +1,305 @@
-# event-gateway
+# agent-gateway
 
-`event-gateway` 是一个跑在 Windows 宿主机上的轻量 Node.js 服务，用来把 `WeFlow` 的 SSE 事件整理成适合 `agent-runtime` 消费的批量输入。
+这是一个 pnpm workspace monorepo。根目录主要负责统一安装依赖和调度命令，真正可独立启动的服务在 `apps/*` 下面。
 
-## 做什么
+## 目录结构
 
-- 订阅 `WeFlow` 的 `message.new` SSE
-- 按 `messageKey` 去重
-- 按群聚合，并应用 quiet window
-- quiet window 到期后调用 `WeFlow /api/v1/messages` 拉最近消息
-- 组装 `AgentRunInput` 并调用 `agent-runtime`
-- 异步把新消息写入 Graphiti MCP 的 `add_memory`
-- 暴露一个简单的 `/health`
+```text
+apps/gateway        Node.js 网关服务，监听 WeFlow，处理插件和 agent-runtime 调用
+apps/web            Next.js 控制台，用来查看状态和管理插件
+packages/shared     共享类型/契约占位包
+packages/plugin-sdk 插件 SDK 占位包
+```
 
-## 运行
+## 准备环境
 
-1. 复制 `.env.example` 为 `.env`
-2. 配置 `WEFLOW_ACCESS_TOKEN`
-3. 配置 `AGENT_RUNTIME_URL`
-4. 可选配置 `GRAPHITI_MCP_URL`
-5. 安装依赖并启动
+建议使用 Node 22：
+
+```bash
+nvm use 22.22.2
+```
+
+安装所有 workspace 依赖：
 
 ```bash
 pnpm install
-pnpm dev
 ```
 
-## 当前默认约定
+## 配置环境变量
 
-- 只处理群聊，会忽略非 `@chatroom` 会话
-- 第一次处理某个群时，不回放历史；只取本轮 SSE 事件数量对应的最新几条入站消息
-- Graphiti 写入失败不会阻塞回复链路
-- 如果 `AGENT_RUNTIME_URL` 为空，网关会退化为只记录日志，不真正发起 agent run
+首次使用建议运行初始化脚本：
 
-## Agent Runtime 请求体
-
-```json
-{
-  "runId": "uuid",
-  "sessionId": "123@chatroom",
-  "groupName": "项目群",
-  "triggerReason": "mention",
-  "triggerEventCount": 2,
-  "gapDetected": false,
-  "newMessages": [],
-  "recentMessages": [],
-  "botProfile": {
-    "name": "bot",
-    "aliases": ["bot", "机器人"],
-    "wechatIds": []
-  },
-  "metadata": {
-    "source": "weflow",
-    "oldestFetchedLocalId": 100,
-    "newestFetchedLocalId": 120
-  }
-}
+```bash
+pnpm init:env
 ```
 
-## Graphiti 写入
+脚本会生成：
 
-当配置了 `GRAPHITI_MCP_URL` 时，网关会连接 Graphiti 的 MCP HTTP 入口，例如：
+```text
+apps/gateway/.env
+apps/web/.env
+```
 
-- `http://127.0.0.1:8000/mcp/`
+脚本会自动生成：
 
-然后调用 MCP 工具：
+- `GATEWAY_ADMIN_TOKEN`
+- `WEB_SESSION_SECRET`
+- `WEB_ADMIN_PASSWORD_HASH`
 
-- `add_memory`
+脚本只会询问必须人工确认的内容，例如：
 
-当前写入策略是：
+- Web 控制台登录密码
+- WeFlow Base URL
+- WeFlow Access Token
+- 机器人名称和别名
+- 插件管理员微信 ID
+- 可选的 Agent Runtime URL
+- 可选的 Graphiti MCP URL
 
-- 每个 quiet window 的 `newMessages` 会聚合成一个 Graphiti episode
-- `group_id` 由 `GRAPHITI_GROUP_PREFIX + sessionId` 规范化而来，例如 `wechat:56594698995@chatroom` 会变成 `wechat_56594698995_chatroom`
-- `source` 使用精简 `json`，只保留 `sessionId`、`groupName` 和每条消息的 `sender` / `timestamp` / `content`
-- 如果配置了 `GRAPHITI_MCP_URL`，网关会在启动阶段先连上 Graphiti；连不上就直接启动失败
+如果 `.env` 已经存在，脚本会询问是否覆盖。
+
+配置示例文件仍然保留。gateway 配置示例在：
+
+```text
+apps/gateway/.env.example
+```
+
+web 配置示例在：
+
+```text
+apps/web/.env.example
+```
+
+如果你想手动配置，也可以复制示例文件：
+
+```bash
+cp apps/gateway/.env.example apps/gateway/.env
+cp apps/web/.env.example apps/web/.env
+```
+
+手动配置时，如果要让 web 控制台管理 gateway 插件，两个 `.env` 里需要配置同一个 token：
+
+```env
+GATEWAY_ADMIN_TOKEN=一段足够长的随机字符串
+```
+
+web 侧还需要：
+
+```env
+GATEWAY_ADMIN_BASE_URL=http://127.0.0.1:3400
+WEB_SESSION_SECRET=一段足够长的随机字符串
+WEB_ADMIN_PASSWORD_HASH=密码哈希
+```
+
+手动生成密码哈希：
+
+```bash
+pnpm web:hash-password -- 你的登录密码
+```
+
+把输出的 `WEB_ADMIN_PASSWORD_HASH=...` 写入 `apps/web/.env`。
+
+## 初始化脚本会写入哪些默认值
+
+`pnpm init:env` 会把大多数首次使用不需要关心的配置写成默认值，例如：
+
+```env
+GATEWAY_HOST=127.0.0.1
+GATEWAY_PORT=3400
+REDIS_URL=redis://127.0.0.1:6479
+QUIET_WINDOW_MS=8000
+MENTION_QUIET_WINDOW_MS=2000
+```
+
+`AGENT_RUNTIME_URL` 和 `GRAPHITI_MCP_URL` 可以在初始化时留空。留空时 gateway 可以先跑起来观察消息，不会强制连接这些下游服务。
+
+## 常用启动命令
+
+在根目录启动 gateway：
+
+```bash
+pnpm gateway:dev
+```
+
+gateway 默认监听：
+
+```text
+http://127.0.0.1:3400
+```
+
+健康检查：
+
+```bash
+curl http://127.0.0.1:3400/health
+```
+
+在根目录启动 web 控制台：
+
+```bash
+pnpm web:dev
+```
+
+web 默认监听：
+
+```text
+http://127.0.0.1:3000
+```
+
+推荐开发时开两个终端：
+
+```bash
+# 终端 1
+pnpm gateway:dev
+
+# 终端 2
+pnpm web:dev
+```
+
+## 构建
+
+构建全部 workspace：
+
+```bash
+pnpm build
+```
+
+只构建 gateway：
+
+```bash
+pnpm gateway:build
+```
+
+只构建 web：
+
+```bash
+pnpm web:build
+```
+
+## 生产启动
+
+先构建：
+
+```bash
+pnpm build
+```
+
+启动 gateway：
+
+```bash
+pnpm gateway:start
+```
+
+启动 web：
+
+```bash
+pnpm web:start
+```
+
+gateway 和 web 是两个独立服务，可以分开部署、分开启动。
+
+## 运行某个 workspace 的命令
+
+根目录脚本本质上是 pnpm filter 的快捷方式。
+
+例如：
+
+```bash
+pnpm --filter @agent-gateway/gateway dev
+pnpm --filter @agent-gateway/web dev
+```
+
+如果要给某个 app 安装依赖，不要直接装到根目录。使用 `--filter`：
+
+```bash
+pnpm add --filter @agent-gateway/web lucide-react
+pnpm add -D --filter @agent-gateway/web tailwindcss
+pnpm add --filter @agent-gateway/gateway zod
+```
+
+根目录 `package.json` 只放 workspace 调度脚本，业务依赖应放在对应 app/package 里。
+
+## 插件管理 API 调试
+
+开启 gateway 后，如果配置了 `GATEWAY_ADMIN_TOKEN`，可以直接调用 admin API：
+
+```bash
+curl \
+  -H "Authorization: Bearer $GATEWAY_ADMIN_TOKEN" \
+  http://127.0.0.1:3400/admin/plugins
+```
+
+查看某个群的插件状态时，`sessionId` 要 URL encode：
+
+```bash
+curl \
+  -H "Authorization: Bearer $GATEWAY_ADMIN_TOKEN" \
+  "http://127.0.0.1:3400/admin/sessions/56594698995%40chatroom/plugins"
+```
+
+关闭某个群的签到插件：
+
+```bash
+curl -X POST \
+  -H "Authorization: Bearer $GATEWAY_ADMIN_TOKEN" \
+  "http://127.0.0.1:3400/admin/sessions/56594698995%40chatroom/plugins/checkin/disable"
+```
+
+重新开启：
+
+```bash
+curl -X POST \
+  -H "Authorization: Bearer $GATEWAY_ADMIN_TOKEN" \
+  "http://127.0.0.1:3400/admin/sessions/56594698995%40chatroom/plugins/checkin/enable"
+```
+
+## 离线导入脚本
+
+导入历史聊天：
+
+```bash
+pnpm gateway:import:history
+```
+
+导入 persona seed memory：
+
+```bash
+pnpm gateway:import:persona-seed
+```
+
+这两个脚本属于 gateway，配置也从 `apps/gateway/.env` 读取。
+
+## 常见问题
+
+### pnpm 报 `URL.canParse is not a function`
+
+通常是当前 Node 版本太旧。先切到 Node 22：
+
+```bash
+nvm use 22.22.2
+pnpm install
+```
+
+### web 登录失败
+
+检查：
+
+- `apps/web/.env` 是否配置了 `WEB_ADMIN_PASSWORD_HASH`
+- 是否用 `pnpm web:hash-password -- 密码` 生成 hash
+- `WEB_SESSION_SECRET` 是否存在
+
+### web 插件页面无法连接 gateway
+
+检查：
+
+- gateway 是否正在运行
+- `apps/web/.env` 的 `GATEWAY_ADMIN_BASE_URL` 是否正确
+- `apps/web/.env` 的 `GATEWAY_ADMIN_TOKEN` 是否和 `apps/gateway/.env` 一致
+- gateway 是否配置了 `GATEWAY_ADMIN_TOKEN`
+
+### admin API 返回 404
+
+如果 `/admin/*` 返回 404，通常说明 gateway 没有配置 `GATEWAY_ADMIN_TOKEN`。这是预期的安全行为。
+
+### 不确定命令该在哪个目录跑
+
+优先在仓库根目录跑本文档里的命令。根目录脚本会用 pnpm workspace 自动进入对应 app。

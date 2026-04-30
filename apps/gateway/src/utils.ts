@@ -1,5 +1,12 @@
 import crypto from "node:crypto";
-import type { BotProfile, MessageContentType, TriggerReason, WeFlowApiMessage, WeFlowSseMessageEvent } from "./types.js";
+import type {
+  BotProfile,
+  MessageContentType,
+  NormalizedMessage,
+  TriggerReason,
+  WeFlowApiMessage,
+  WeFlowSseMessageEvent,
+} from "./types.js";
 
 /**
  * sleep 只用于“失败后稍等一下再重试”这种节奏控制。
@@ -108,4 +115,53 @@ export function isBotSourceName(sourceName: string | undefined, botProfile: BotP
  */
 export function chooseTriggerReason(events: WeFlowSseMessageEvent[], botProfile: BotProfile): TriggerReason {
   return events.some((event) => detectMention(event.content, botProfile)) ? "mention" : "quiet_window";
+}
+
+export function normalizeWeFlowApiMessage(
+  sessionId: string,
+  groupName: string | undefined,
+  message: WeFlowApiMessage,
+  botProfile: BotProfile,
+): NormalizedMessage {
+  const createdAtUnixMs = normalizeCreateTime(message.createTime);
+  const senderId =
+    message.senderUsername?.trim() ||
+    (message.isSend ? botProfile.wechatIds[0] || botProfile.name : "unknown");
+  const content =
+    message.parsedContent ||
+    message.content ||
+    message.rawContent ||
+    `[${message.mediaType || "message"}]`;
+  const isSelfSent = message.isSend === 1;
+  const isFromBot = isSelfSent || botProfile.wechatIds.includes(senderId);
+
+  return {
+    sessionId,
+    groupName,
+    localId: message.localId,
+    serverId: message.serverId,
+    senderId,
+    senderName: senderId,
+    timestamp: new Date(createdAtUnixMs).toISOString(),
+    createdAtUnixMs,
+    content,
+    rawContent: message.rawContent || content,
+    contentType: inferContentType(message),
+    isGroup: isGroupSession(sessionId),
+    isSelfSent,
+    isFromBot,
+    isMentionBot: detectMention(content, botProfile),
+    fingerprint: `${sessionId}:${message.localId}`,
+  };
+}
+
+export function normalizeWeFlowApiMessages(
+  sessionId: string,
+  groupName: string | undefined,
+  messages: WeFlowApiMessage[],
+  botProfile: BotProfile,
+): NormalizedMessage[] {
+  return [...messages]
+    .sort((left, right) => left.localId - right.localId)
+    .map((message) => normalizeWeFlowApiMessage(sessionId, groupName, message, botProfile));
 }

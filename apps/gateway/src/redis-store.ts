@@ -75,6 +75,14 @@ export class RedisStore {
     await this.redis.set(this.key(`session:${sessionId}:committed-local-id`), String(localId));
   }
 
+  public async getValue(suffix: string): Promise<string | null> {
+    return this.redis.get(this.key(suffix));
+  }
+
+  public async setValue(suffix: string, value: string): Promise<void> {
+    await this.redis.set(this.key(suffix), value);
+  }
+
   public async acquireRunLock(sessionId: string): Promise<string | null> {
     // 锁是按群维度的。MVP 虽然默认单进程，但这里先把同群互斥做好，
     // 后面即使扩成多实例，也不至于一个群同时跑多个判断。
