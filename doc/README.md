@@ -16,6 +16,31 @@
 
 ## Gateway
 
+### [gateway-overview.md](./gateway-overview.md)
+
+介绍 gateway 当前的整体定位、运行时依赖和 `apps/gateway/src` 模块地图。
+
+适合在这些场景阅读：
+
+- 第一次接手 gateway 代码。
+- 想知道消息源、插件、数据库、调度、外部集成分别放在哪里。
+- 不确定某个改动应该从哪个模块开始看。
+
+### [gateway-message-flow.md](./gateway-message-flow.md)
+
+介绍 gateway 当前的消息处理链路，包括：
+
+- `MessageSource` 和 `MessageHistoryProvider` 抽象。
+- `weflow` 和 `wechat-http` 两种消息源如何进入主链路。
+- `EventGateway` 的过滤、去重、插件短路、quiet window 和 agent-runtime 调用顺序。
+- `newMessages`、`recentMessages`、`committedLocalId`、`gapDetected` 的含义。
+
+适合在这些场景阅读：
+
+- 要新增或切换消息源。
+- 要排查消息为什么没有触发插件或 agent-runtime。
+- 要理解一条微信消息从入口到处理完成的完整路径。
+
 ### [gateway-db-layer.md](./gateway-db-layer.md)
 
 介绍 gateway 的 PostgreSQL/Drizzle 数据层，包括：
@@ -129,7 +154,19 @@
 README.md
 doc/README.md
 doc/monorepo-layout.md
-doc/plugin-system-design.md
+doc/gateway-overview.md
+doc/gateway-message-flow.md
+```
+
+### 修改消息接入或主链路
+
+```text
+doc/gateway-overview.md
+doc/gateway-message-flow.md
+doc/wechat-http-callback-integration.md
+apps/gateway/src/index.ts
+apps/gateway/src/messaging/event-gateway.ts
+apps/gateway/src/messaging/sources/
 ```
 
 ### 新增一个普通插件
