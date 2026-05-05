@@ -46,6 +46,13 @@ export class WechatHttpMessageSource implements MessageSource, MessageHistoryPro
           await this.handleSyncMessageCallback(req, url, match, sendJson);
         },
       },
+      {
+        method: "POST",
+        pathPattern: /^\/api\/v1\/wechat-client\/([^/]+)\/logout$/,
+        handle: async ({ req, url, match, sendJson }) => {
+          await this.handleLogoutCallback(req, url, match, sendJson);
+        },
+      },
     ];
   }
 
@@ -109,6 +116,7 @@ export class WechatHttpMessageSource implements MessageSource, MessageHistoryPro
         return;
       }
 
+      this.status.connected = true;
       const body = await readJsonBody(req);
       const syncMessage = extractWechatRobotSyncMessage(body);
       if (!syncMessage) {
@@ -167,6 +175,59 @@ export class WechatHttpMessageSource implements MessageSource, MessageHistoryPro
     }
   }
 
+  private async handleLogoutCallback(
+    req: http.IncomingMessage,
+    url: URL,
+    match: RegExpMatchArray,
+    sendJson: (statusCode: number, body: unknown) => void,
+  ): Promise<void> {
+    try {
+      this.assertAuthorized(req, url);
+
+      const wechatId = decodePathSegment(match[1] ?? "");
+      const robotWxid = this.config.wechatRobotWxid || wechatId;
+      if (this.config.wechatRobotWxid && wechatId !== this.config.wechatRobotWxid) {
+        this.logger.warn(
+          { wechatId, expectedWechatId: this.config.wechatRobotWxid },
+          "收到非当前机器人 wxid 的登出回调，已忽略",
+        );
+        sendJson(202, { success: true, ignored: true, reason: "wechat_id_mismatch" });
+        return;
+      }
+
+      const body = await readOptionalJsonBody(req);
+      const bodyWxid = readStringField(body, "wxid") ?? readStringField(body, "WxID");
+      if (bodyWxid && bodyWxid !== robotWxid) {
+        this.logger.warn(
+          { wechatId, robotWxid, bodyWxid },
+          "登出回调 body wxid 与当前机器人不一致，已忽略",
+        );
+        sendJson(202, { success: true, ignored: true, reason: "body_wxid_mismatch" });
+        return;
+      }
+
+      const logoutType = readStringField(body, "type");
+      const logoutStatus = readStringField(body, "status");
+      if (!logoutType || logoutType === "offline") {
+        this.status.connected = false;
+      }
+
+      this.logger.warn(
+        { wechatId, wxid: bodyWxid, type: logoutType, status: logoutStatus },
+        "收到微信机器人登出回调",
+      );
+      sendJson(200, { success: true });
+    } catch (error) {
+      if (error instanceof CallbackHttpError) {
+        sendJson(error.statusCode, { error: error.message });
+        return;
+      }
+
+      this.logger.error({ err: error }, "处理微信机器人登出回调失败");
+      sendJson(500, { error: "Internal Server Error" });
+    }
+  }
+
   private assertAuthorized(req: http.IncomingMessage, url: URL): void {
     const expected = this.config.wechatCallbackToken;
     if (!expected) {
@@ -194,6 +255,32 @@ class CallbackHttpError extends Error {
 }
 
 async function readJsonBody(req: http.IncomingMessage): Promise<unknown> {
+  const raw = await readBodyText(req);
+  if (!raw.trim()) {
+    throw new CallbackHttpError(400, "Request body is empty");
+  }
+
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch {
+    throw new CallbackHttpError(400, "Request body is not valid JSON");
+  }
+}
+
+async function readOptionalJsonBody(req: http.IncomingMessage): Promise<unknown> {
+  const raw = await readBodyText(req);
+  if (!raw.trim()) {
+    return undefined;
+  }
+
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch {
+    throw new CallbackHttpError(400, "Request body is not valid JSON");
+  }
+}
+
+async function readBodyText(req: http.IncomingMessage): Promise<string> {
   const chunks: Buffer[] = [];
   let totalBytes = 0;
 
@@ -206,16 +293,7 @@ async function readJsonBody(req: http.IncomingMessage): Promise<unknown> {
     chunks.push(buffer);
   }
 
-  const raw = Buffer.concat(chunks).toString("utf8");
-  if (!raw.trim()) {
-    throw new CallbackHttpError(400, "Request body is empty");
-  }
-
-  try {
-    return JSON.parse(raw) as unknown;
-  } catch {
-    throw new CallbackHttpError(400, "Request body is not valid JSON");
-  }
+  return Buffer.concat(chunks).toString("utf8");
 }
 
 function decodePathSegment(value: string): string {
@@ -238,4 +316,17 @@ function parseBearerToken(value: string | undefined): string | undefined {
     return undefined;
   }
   return value.slice("Bearer ".length).trim() || undefined;
+}
+
+function readStringField(value: unknown, key: string): string | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const field = value[key];
+  return typeof field === "string" && field.trim() ? field.trim() : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

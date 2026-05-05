@@ -84,6 +84,21 @@
 - 要判断任务是否需要补偿、重试或幂等状态。
 - 要理解插件关闭后定时任务为什么不能直接删除。
 
+### [wechat-http-callback-integration.md](./wechat-http-callback-integration.md)
+
+介绍微信机器人服务端通过 HTTP 回调接入 gateway 的部署约定，包括：
+
+- gateway 侧 `wechat-http` 消息源配置。
+- 机器人服务端 Docker 里的 `WECHAT_CLIENT_HOST` 应该如何填写。
+- 局域网联调时如何验证 `/health` 和 `sync-message` 回调。
+- 为什么不能把容器里的回调地址写成 `127.0.0.1`。
+
+适合在这些场景阅读：
+
+- 要把消息源从 WeFlow SSE 切换到机器人服务端 HTTP 回调。
+- 要和 `wechat-robot-client` / 机器人服务端部署同事对接。
+- 要排查局域网回调不通、404、wxid 不匹配等问题。
+
 ### [plugin-system-design.md](./plugin-system-design.md)
 
 介绍插件系统的整体设计背景和产品侧目标。
