@@ -1,4 +1,4 @@
-import type { GatewayPlugin, PluginDescriptor, PluginStateStore } from "./types.js";
+import type { GatewayPlugin, PluginDescriptor, PluginServices, PluginStateStore } from "./types.js";
 
 export class PluginAdminError extends Error {
   public constructor(
@@ -18,6 +18,7 @@ export class PluginAdminService {
   public constructor(
     private readonly plugins: GatewayPlugin[],
     private readonly pluginState: PluginStateStore,
+    private readonly services: PluginServices,
   ) {}
 
   public listPlugins(): PluginDescriptor[] {
@@ -51,6 +52,27 @@ export class PluginAdminService {
       throw new PluginAdminError("System plugins cannot be enabled or disabled via admin API", 400);
     }
 
+    const currentEnabled = await this.pluginState.isEnabled(sessionId, plugin.id);
+    if (currentEnabled === enabled) {
+      return {
+        ...toDescriptor(plugin),
+        enabled,
+        manageable: true,
+      };
+    }
+
+    if (enabled) {
+      await plugin.beforeEnable?.({
+        sessionId,
+        services: this.services,
+      });
+    } else {
+      await plugin.beforeDisable?.({
+        sessionId,
+        services: this.services,
+      });
+    }
+
     await this.pluginState.setEnabled(sessionId, plugin.id, enabled);
     return {
       ...toDescriptor(plugin),
@@ -72,4 +94,3 @@ function toDescriptor(plugin: GatewayPlugin): PluginDescriptor {
     system: Boolean(plugin.system),
   };
 }
-

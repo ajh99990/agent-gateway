@@ -1,23 +1,21 @@
-import type { Logger } from "pino";
 import type { AppConfig } from "../config.js";
-import type { NormalizedMessage, WeFlowSseMessageEvent } from "../types.js";
-import { normalizeWeFlowApiMessages } from "../utils.js";
-import { WeFlowClient } from "../weflow-client.js";
-import type { MessageSender } from "./message-sender.js";
+import type {
+  InboundMessageEvent,
+  MessageHistoryProvider,
+  NormalizedMessage,
+} from "../types.js";
 import type {
   GatewayPlugin,
   PluginCatalog,
+  PluginCommonServices,
   PluginDescriptor,
   PluginServices,
-  PluginStateStore,
 } from "./types.js";
 
 interface PluginRouterOptions {
   config: AppConfig;
-  logger: Logger;
-  weflowClient: WeFlowClient;
-  pluginState: PluginStateStore;
-  messageSender: MessageSender;
+  historyProvider: MessageHistoryProvider;
+  services: PluginCommonServices;
   plugins: GatewayPlugin[];
 }
 
@@ -36,16 +34,17 @@ export class PluginRouter {
     this.plugins = [...options.plugins];
     this.catalog = this.createCatalog();
     this.services = {
-      sendMessage: (input) => this.options.messageSender.sendMessage(input),
-      pluginState: this.options.pluginState,
+      ...this.options.services,
       plugins: this.catalog,
-      logger: this.options.logger,
-      adminWechatIds: this.options.config.pluginAdminWechatIds,
     };
     this.buildKeywordIndex();
   }
 
-  public async tryHandle(event: WeFlowSseMessageEvent): Promise<boolean> {
+  public getServices(): PluginServices {
+    return this.services;
+  }
+
+  public async tryHandle(event: InboundMessageEvent): Promise<boolean> {
     const content = event.content?.trim();
     if (!content) {
       return false;
@@ -57,9 +56,9 @@ export class PluginRouter {
     }
 
     if (!plugin.system) {
-      const enabled = await this.options.pluginState.isEnabled(event.sessionId, plugin.id);
+      const enabled = await this.services.pluginState.isEnabled(event.sessionId, plugin.id);
       if (!enabled) {
-        this.options.logger.debug(
+        this.services.logger.debug(
           {
             sessionId: event.sessionId,
             pluginId: plugin.id,
@@ -76,7 +75,7 @@ export class PluginRouter {
     try {
       message = await this.loadMessageForEvent(event);
     } catch (error) {
-      this.options.logger.error(
+      this.services.logger.error(
         {
           err: error,
           sessionId: event.sessionId,
@@ -85,9 +84,9 @@ export class PluginRouter {
           messageKey: event.messageKey,
           content,
         },
-        "消息命中插件，但补拉完整 WeFlow 消息失败，插件处理已短路",
+        "消息命中插件，但补拉完整消息失败，插件处理已短路",
       );
-      await this.options.messageSender.sendMessage({
+      await this.services.sendMessage({
         sessionId: event.sessionId,
         groupName: event.groupName,
         text: "暂时无法读取完整消息，插件处理失败。",
@@ -96,7 +95,7 @@ export class PluginRouter {
     }
 
     if (!message) {
-      this.options.logger.warn(
+      this.services.logger.warn(
         {
           sessionId: event.sessionId,
           pluginId: plugin.id,
@@ -104,9 +103,9 @@ export class PluginRouter {
           messageKey: event.messageKey,
           content,
         },
-        "消息命中插件，但无法定位完整 WeFlow 消息，插件处理已短路",
+        "消息命中插件，但无法定位完整消息，插件处理已短路",
       );
-      await this.options.messageSender.sendMessage({
+      await this.services.sendMessage({
         sessionId: event.sessionId,
         groupName: event.groupName,
         text: plugin.system
@@ -127,7 +126,7 @@ export class PluginRouter {
       });
 
       if (result.replyText?.trim()) {
-        await this.options.messageSender.sendMessage({
+        await this.services.sendMessage({
           sessionId: event.sessionId,
           groupName: event.groupName,
           text: result.replyText,
@@ -135,7 +134,7 @@ export class PluginRouter {
         });
       }
 
-      this.options.logger.info(
+      this.services.logger.info(
         {
           sessionId: event.sessionId,
           pluginId: plugin.id,
@@ -146,7 +145,7 @@ export class PluginRouter {
       );
       return true;
     } catch (error) {
-      this.options.logger.error(
+      this.services.logger.error(
         {
           err: error,
           sessionId: event.sessionId,
@@ -156,7 +155,7 @@ export class PluginRouter {
         },
         "插件处理消息失败，当前消息不会 fallback 到聊天 agent",
       );
-      await this.options.messageSender.sendMessage({
+      await this.services.sendMessage({
         sessionId: event.sessionId,
         groupName: event.groupName,
         text: "插件处理失败，请稍后再试。",
@@ -168,26 +167,33 @@ export class PluginRouter {
 
   private findPlugin(content: string): GatewayPlugin | undefined {
     const systemPlugin = this.plugins.find(
-      (plugin) => plugin.system && (plugin.matches?.(content) || plugin.keywords.includes(content)),
+      (plugin) => plugin.system && pluginMatches(plugin, content),
     );
     if (systemPlugin) {
       return systemPlugin;
     }
 
-    return this.keywordIndex.get(content);
+    const keywordPlugin = this.keywordIndex.get(content);
+    if (keywordPlugin) {
+      return keywordPlugin;
+    }
+
+    return this.plugins.find(
+      (plugin) => !plugin.system && plugin.matches?.(content),
+    );
   }
 
-  private async loadMessageForEvent(event: WeFlowSseMessageEvent): Promise<NormalizedMessage | null> {
-    const response = await this.options.weflowClient.getMessages(
-      event.sessionId,
-      this.options.config.weflowFetchLimit,
-    );
-    const messages = normalizeWeFlowApiMessages(
-      event.sessionId,
-      event.groupName,
-      response.messages,
-      this.options.config.botProfile,
-    );
+  private async loadMessageForEvent(event: InboundMessageEvent): Promise<NormalizedMessage | null> {
+    if (event.normalizedMessage) {
+      return event.normalizedMessage;
+    }
+
+    const page = await this.options.historyProvider.getRecentMessages({
+      sessionId: event.sessionId,
+      groupName: event.groupName,
+      limit: this.options.config.weflowFetchLimit,
+    });
+    const messages = page.messages;
     if (messages.length === 0) {
       return null;
     }
@@ -227,6 +233,7 @@ export class PluginRouter {
         const plugin = this.plugins.find((candidate) => candidate.name === normalizedName);
         return plugin ? toDescriptor(plugin) : undefined;
       },
+      getPluginById: (pluginId) => this.plugins.find((plugin) => plugin.id === pluginId),
     };
   }
 
@@ -266,6 +273,10 @@ function toDescriptor(plugin: GatewayPlugin): PluginDescriptor {
     keywords: [...plugin.keywords],
     system: Boolean(plugin.system),
   };
+}
+
+function pluginMatches(plugin: GatewayPlugin, content: string): boolean {
+  return Boolean(plugin.matches?.(content)) || plugin.keywords.includes(content);
 }
 
 function parseMessageKey(messageKey: string): MessageKeyHint {

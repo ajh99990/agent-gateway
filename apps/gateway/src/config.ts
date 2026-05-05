@@ -2,6 +2,8 @@ import "dotenv/config";
 import { z } from "zod";
 import type { BotProfile } from "./types.js";
 
+export type MessageSourceKind = "weflow" | "wechat-http";
+
 /**
  * 环境变量里很多值是字符串，比如 "true"、"120"、"a,b,c"。
  * 这些小工具的作用，就是在服务启动最早期把原始字符串转成业务里真正好用的类型。
@@ -64,13 +66,18 @@ const envSchema = z.object({
   REDIS_KEY_PREFIX: z.string().default("wx:event-gateway"),
   SSE_DEDUPE_TTL_SECONDS: z.string().default("3600"),
   RUN_LOCK_TTL_SECONDS: z.string().default("120"),
-  WEFLOW_BASE_URL: z.string().url(),
+  DATABASE_URL: z.string().url(),
+  MESSAGE_SOURCE: z.enum(["weflow", "wechat-http"]).default("weflow"),
+  WEFLOW_BASE_URL: z.string().url().default("http://127.0.0.1:5031"),
   WEFLOW_ACCESS_TOKEN: z.string().optional(),
   WEFLOW_SSE_PATH: z.string().default("/api/v1/push/messages"),
   WEFLOW_MESSAGES_PATH: z.string().default("/api/v1/messages"),
   WEFLOW_FETCH_LIMIT: z.string().default("80"),
   WEFLOW_CATCHUP_FETCH_LIMIT: z.string().default("300"),
   WEFLOW_TIMEOUT_MS: z.string().default("15000"),
+  WECHAT_ROBOT_WXID: z.string().optional(),
+  WECHAT_CALLBACK_TOKEN: z.string().optional(),
+  WECHAT_HTTP_HISTORY_LIMIT: z.string().default("300"),
   GROUP_ONLY: z.string().optional(),
   QUIET_WINDOW_MS: z.string().default("8000"),
   MENTION_QUIET_WINDOW_MS: z.string().default("2000"),
@@ -81,6 +88,9 @@ const envSchema = z.object({
   BOT_ALIASES: z.string().optional(),
   BOT_WECHAT_IDS: z.string().optional(),
   PLUGIN_ADMIN_WECHAT_IDS: z.string().optional(),
+  SCHEDULER_QUEUE_NAME: z.string().default("gateway-scheduler"),
+  SCHEDULER_WORKER_CONCURRENCY: z.string().default("4"),
+  SCHEDULER_DEFAULT_TIMEZONE: z.string().default("Asia/Shanghai"),
   AGENT_RUNTIME_URL: z.string().optional(),
   AGENT_RUNTIME_BEARER_TOKEN: z.string().optional(),
   AGENT_RUNTIME_TIMEOUT_MS: z.string().default("30000"),
@@ -109,6 +119,8 @@ export interface AppConfig {
   redisKeyPrefix: string;
   sseDedupeTtlSeconds: number;
   runLockTtlSeconds: number;
+  databaseUrl: string;
+  messageSource: MessageSourceKind;
   weflowBaseUrl: string;
   weflowAccessToken?: string;
   weflowSsePath: string;
@@ -116,6 +128,9 @@ export interface AppConfig {
   weflowFetchLimit: number;
   weflowCatchupFetchLimit: number;
   weflowTimeoutMs: number;
+  wechatRobotWxid?: string;
+  wechatCallbackToken?: string;
+  wechatHttpHistoryLimit: number;
   groupOnly: boolean;
   quietWindowMs: number;
   mentionQuietWindowMs: number;
@@ -124,6 +139,9 @@ export interface AppConfig {
   agentContextCharLimit: number;
   botProfile: BotProfile;
   pluginAdminWechatIds: string[];
+  schedulerQueueName: string;
+  schedulerWorkerConcurrency: number;
+  schedulerDefaultTimezone: string;
   agentRuntimeUrl?: string;
   agentRuntimeBearerToken?: string;
   agentRuntimeTimeoutMs: number;
@@ -145,11 +163,19 @@ export interface AppConfig {
 export function loadConfig(): AppConfig {
   const env = envSchema.parse(process.env);
   const aliases = parseCsv(env.BOT_ALIASES);
-  const wechatIds = parseCsv(env.BOT_WECHAT_IDS);
+  const configuredWechatIds = parseCsv(env.BOT_WECHAT_IDS);
   const pluginAdminWechatIds = parseCsv(env.PLUGIN_ADMIN_WECHAT_IDS);
 
   // 这里把主名字也并入 aliases，后面做 @mention 判断时就不用区分“主名”和“别名”。
   const botAliases = Array.from(new Set([env.BOT_NAME, ...aliases].filter(Boolean)));
+  const wechatRobotWxid = env.WECHAT_ROBOT_WXID?.trim() || undefined;
+  const wechatIds = Array.from(
+    new Set(
+      [...configuredWechatIds, wechatRobotWxid].filter(
+        (wechatId): wechatId is string => Boolean(wechatId),
+      ),
+    ),
+  );
 
   return {
     nodeEnv: env.NODE_ENV,
@@ -162,6 +188,8 @@ export function loadConfig(): AppConfig {
     redisKeyPrefix: env.REDIS_KEY_PREFIX,
     sseDedupeTtlSeconds: parseInteger(env.SSE_DEDUPE_TTL_SECONDS, 3600),
     runLockTtlSeconds: parseInteger(env.RUN_LOCK_TTL_SECONDS, 120),
+    databaseUrl: env.DATABASE_URL,
+    messageSource: env.MESSAGE_SOURCE,
     weflowBaseUrl: env.WEFLOW_BASE_URL,
     weflowAccessToken: env.WEFLOW_ACCESS_TOKEN?.trim() || undefined,
     weflowSsePath: env.WEFLOW_SSE_PATH,
@@ -169,6 +197,9 @@ export function loadConfig(): AppConfig {
     weflowFetchLimit: parseInteger(env.WEFLOW_FETCH_LIMIT, 80),
     weflowCatchupFetchLimit: parseInteger(env.WEFLOW_CATCHUP_FETCH_LIMIT, 300),
     weflowTimeoutMs: parseInteger(env.WEFLOW_TIMEOUT_MS, 15000),
+    wechatRobotWxid,
+    wechatCallbackToken: env.WECHAT_CALLBACK_TOKEN?.trim() || undefined,
+    wechatHttpHistoryLimit: parseInteger(env.WECHAT_HTTP_HISTORY_LIMIT, 300),
     groupOnly: parseBoolean(env.GROUP_ONLY, true),
     quietWindowMs: parseInteger(env.QUIET_WINDOW_MS, 8000),
     mentionQuietWindowMs: parseInteger(env.MENTION_QUIET_WINDOW_MS, 2000),
@@ -181,6 +212,9 @@ export function loadConfig(): AppConfig {
       wechatIds,
     },
     pluginAdminWechatIds,
+    schedulerQueueName: env.SCHEDULER_QUEUE_NAME.trim() || "gateway-scheduler",
+    schedulerWorkerConcurrency: Math.max(1, parseInteger(env.SCHEDULER_WORKER_CONCURRENCY, 4)),
+    schedulerDefaultTimezone: env.SCHEDULER_DEFAULT_TIMEZONE.trim() || "Asia/Shanghai",
     agentRuntimeUrl: env.AGENT_RUNTIME_URL?.trim() || undefined,
     agentRuntimeBearerToken: env.AGENT_RUNTIME_BEARER_TOKEN?.trim() || undefined,
     agentRuntimeTimeoutMs: parseInteger(env.AGENT_RUNTIME_TIMEOUT_MS, 30000),

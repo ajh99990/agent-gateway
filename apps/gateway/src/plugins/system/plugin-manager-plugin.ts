@@ -1,10 +1,15 @@
-import type { GatewayPlugin, PluginContext, PluginHandleResult } from "../types.js";
+import type {
+  GatewayPlugin,
+  PluginBootstrapContext,
+  PluginContext,
+  PluginHandleResult,
+} from "../types.js";
 
 const LIST_COMMAND = "插件列表";
 const ENABLE_PREFIX = "开启插件 ";
 const DISABLE_PREFIX = "关闭插件 ";
 
-export function createPluginManagerPlugin(): GatewayPlugin {
+export function createPluginManagerPlugin(_context: PluginBootstrapContext): GatewayPlugin {
   return {
     id: "plugin-manager",
     name: "插件管理",
@@ -107,9 +112,21 @@ async function setPluginEnabled(
     };
   }
 
+  const runtimePlugin = context.services.plugins.getPluginById(plugin.id);
+  const hookResult = enabled
+    ? await runtimePlugin?.beforeEnable?.({
+        sessionId: context.sessionId,
+        groupName: context.groupName,
+        services: context.services,
+      })
+    : await runtimePlugin?.beforeDisable?.({
+        sessionId: context.sessionId,
+        groupName: context.groupName,
+        services: context.services,
+      });
+
   await context.services.pluginState.setEnabled(context.sessionId, plugin.id, enabled);
   return {
-    replyText: `已${enabled ? "开启" : "关闭"}${plugin.name}插件。`,
+    replyText: hookResult?.replyText ?? `已${enabled ? "开启" : "关闭"}${plugin.name}插件。`,
   };
 }
-

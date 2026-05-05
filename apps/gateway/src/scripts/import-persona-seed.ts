@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { loadConfig } from "../config.js";
-import { GraphitiClient, type GraphitiMemoryInput } from "../graphiti-client.js";
-import { createLogger } from "../logger.js";
+import { createLogger } from "../infra/logger.js";
+import { GraphitiClient, type GraphitiMemoryInput } from "../integrations/graphiti-client.js";
 
 /**
  * 这是“人格 seed memory 导入脚本”。

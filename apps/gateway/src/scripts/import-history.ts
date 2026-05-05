@@ -1,9 +1,9 @@
 import { readFile } from "node:fs/promises";
-import { GraphitiClient } from "../graphiti-client.js";
 import { loadConfig } from "../config.js";
-import { createLogger } from "../logger.js";
+import { createLogger } from "../infra/logger.js";
+import { GraphitiClient } from "../integrations/graphiti-client.js";
+import { createRunId, detectMention, normalizeCreateTime } from "../messaging/message-utils.js";
 import type { GraphitiWriteBatch, NormalizedMessage } from "../types.js";
-import { createRunId, detectMention, normalizeCreateTime } from "../utils.js";
 
 /**
  * This script imports an exported WeFlow chat JSON file into Graphiti.

@@ -1,0 +1,55 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1777603659485,
+      "tag": "0000_awesome_vapor",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1777784111379,
+      "tag": "0001_pretty_the_hood",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1777789708541,
+      "tag": "0002_unknown_darkhawk",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1777792478057,
+      "tag": "0003_parched_tombstone",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1777800144225,
+      "tag": "0004_late_diamondback",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1777812545445,
+      "tag": "0005_worried_goblin_queen",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1777936463896,
+      "tag": "0006_romantic_triathlon",
+      "breakpoints": true
+    }
+  ]
+}

@@ -1,11 +1,12 @@
-import type { GatewayPlugin } from "./types.js";
+import type { GatewayPlugin, PluginBootstrapContext } from "./types.js";
 import { createCheckinPlugin } from "./checkin/checkin-plugin.js";
+import { createExpeditionPlugin } from "./expedition/expedition-plugin.js";
 import { createPluginManagerPlugin } from "./system/plugin-manager-plugin.js";
 
-export function createGatewayPlugins(): GatewayPlugin[] {
+export function createGatewayPlugins(context: PluginBootstrapContext): GatewayPlugin[] {
   return [
-    createPluginManagerPlugin(),
-    createCheckinPlugin(),
+    createPluginManagerPlugin(context),
+    createCheckinPlugin(context),
+    createExpeditionPlugin(context),
   ];
 }
-

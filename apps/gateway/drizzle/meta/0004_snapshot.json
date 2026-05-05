@@ -1,0 +1,917 @@
+{
+  "id": "ca8a2c5b-f7c7-4fc6-8c23-1eea4268f512",
+  "prevId": "3c069fec-6898-4eb9-8802-98b4eefb9ff4",
+  "version": "7",
+  "dialect": "postgresql",
+  "tables": {
+    "public.plugin_kv": {
+      "name": "plugin_kv",
+      "schema": "",
+      "columns": {
+        "plugin_id": {
+          "name": "plugin_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "session_id": {
+          "name": "session_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "key": {
+          "name": "key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "value_json": {
+          "name": "value_json",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "plugin_kv_pk": {
+          "name": "plugin_kv_pk",
+          "columns": [
+            "plugin_id",
+            "session_id",
+            "key"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.plugin_operation_runs": {
+      "name": "plugin_operation_runs",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "bigserial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "plugin_id": {
+          "name": "plugin_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "scope": {
+          "name": "scope",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "scope_id": {
+          "name": "scope_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "operation_key": {
+          "name": "operation_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "attempts": {
+          "name": "attempts",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 1
+        },
+        "metadata": {
+          "name": "metadata",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "error_message": {
+          "name": "error_message",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "started_at": {
+          "name": "started_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "finished_at": {
+          "name": "finished_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "plugin_operation_runs_key_unique": {
+          "name": "plugin_operation_runs_key_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "plugin_id",
+            "scope",
+            "scope_id",
+            "operation_key"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "plugin_operation_runs_scope_check": {
+          "name": "plugin_operation_runs_scope_check",
+          "value": "\"plugin_operation_runs\".\"scope\" in ('global', 'session', 'sender')"
+        },
+        "plugin_operation_runs_status_check": {
+          "name": "plugin_operation_runs_status_check",
+          "value": "\"plugin_operation_runs\".\"status\" in ('running', 'succeeded', 'failed')"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.points_accounts": {
+      "name": "points_accounts",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "bigserial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "session_id": {
+          "name": "session_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "sender_id": {
+          "name": "sender_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "balance": {
+          "name": "balance",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 20
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "points_accounts_session_sender_unique": {
+          "name": "points_accounts_session_sender_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "session_id",
+            "sender_id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "points_accounts_balance_non_negative": {
+          "name": "points_accounts_balance_non_negative",
+          "value": "\"points_accounts\".\"balance\" >= 0"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.points_ledger": {
+      "name": "points_ledger",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "bigserial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "session_id": {
+          "name": "session_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "sender_id": {
+          "name": "sender_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "delta": {
+          "name": "delta",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "balance_before": {
+          "name": "balance_before",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "balance_after": {
+          "name": "balance_after",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source": {
+          "name": "source",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "description": {
+          "name": "description",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "operator_id": {
+          "name": "operator_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "idempotency_key": {
+          "name": "idempotency_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "metadata": {
+          "name": "metadata",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "points_ledger_idempotency_key_unique": {
+          "name": "points_ledger_idempotency_key_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "idempotency_key"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.expedition_entries": {
+      "name": "expedition_entries",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "bigserial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "session_id": {
+          "name": "session_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "group_name": {
+          "name": "group_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "sender_id": {
+          "name": "sender_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "sender_name": {
+          "name": "sender_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "date_key": {
+          "name": "date_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "strategy": {
+          "name": "strategy",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "stake": {
+          "name": "stake",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "all_in": {
+          "name": "all_in",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "revision": {
+          "name": "revision",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 1
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "settled_at": {
+          "name": "settled_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "expedition_entries_daily_sender_unique": {
+          "name": "expedition_entries_daily_sender_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "session_id",
+            "date_key",
+            "sender_id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "expedition_entries_stake_positive": {
+          "name": "expedition_entries_stake_positive",
+          "value": "\"expedition_entries\".\"stake\" > 0"
+        },
+        "expedition_entries_revision_positive": {
+          "name": "expedition_entries_revision_positive",
+          "value": "\"expedition_entries\".\"revision\" > 0"
+        },
+        "expedition_entries_strategy_check": {
+          "name": "expedition_entries_strategy_check",
+          "value": "\"expedition_entries\".\"strategy\" in ('steady', 'adventure', 'crazy')"
+        },
+        "expedition_entries_status_check": {
+          "name": "expedition_entries_status_check",
+          "value": "\"expedition_entries\".\"status\" in ('registered', 'cancelled', 'settled')"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.expedition_players": {
+      "name": "expedition_players",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "bigserial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "session_id": {
+          "name": "session_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "sender_id": {
+          "name": "sender_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "sender_name": {
+          "name": "sender_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "current_depth": {
+          "name": "current_depth",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "run_high_depth": {
+          "name": "run_high_depth",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "total_purification": {
+          "name": "total_purification",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "expedition_players_session_sender_unique": {
+          "name": "expedition_players_session_sender_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "session_id",
+            "sender_id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "expedition_players_current_depth_non_negative": {
+          "name": "expedition_players_current_depth_non_negative",
+          "value": "\"expedition_players\".\"current_depth\" >= 0"
+        },
+        "expedition_players_run_high_depth_non_negative": {
+          "name": "expedition_players_run_high_depth_non_negative",
+          "value": "\"expedition_players\".\"run_high_depth\" >= 0"
+        },
+        "expedition_players_total_purification_non_negative": {
+          "name": "expedition_players_total_purification_non_negative",
+          "value": "\"expedition_players\".\"total_purification\" >= 0"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.expedition_relics": {
+      "name": "expedition_relics",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "bigserial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "session_id": {
+          "name": "session_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "sender_id": {
+          "name": "sender_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "rarity": {
+          "name": "rarity",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "effect_type": {
+          "name": "effect_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "effect_value": {
+          "name": "effect_value",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "description": {
+          "name": "description",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "acquired_date_key": {
+          "name": "acquired_date_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "active": {
+          "name": "active",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "expedition_relics_rarity_check": {
+          "name": "expedition_relics_rarity_check",
+          "value": "\"expedition_relics\".\"rarity\" in ('common', 'rare', 'epic', 'legendary')"
+        },
+        "expedition_relics_effect_type_check": {
+          "name": "expedition_relics_effect_type_check",
+          "value": "\"expedition_relics\".\"effect_type\" in ('survival', 'greed', 'dive', 'luck', 'purification', 'curse')"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.expedition_reports": {
+      "name": "expedition_reports",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "bigserial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "session_id": {
+          "name": "session_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "group_name": {
+          "name": "group_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "date_key": {
+          "name": "date_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "sender_id": {
+          "name": "sender_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "sender_name": {
+          "name": "sender_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "strategy": {
+          "name": "strategy",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "stake": {
+          "name": "stake",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "outcome": {
+          "name": "outcome",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "start_depth": {
+          "name": "start_depth",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "target_depth": {
+          "name": "target_depth",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "final_depth": {
+          "name": "final_depth",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "survival_rate_basis_points": {
+          "name": "survival_rate_basis_points",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "multiplier_basis_points": {
+          "name": "multiplier_basis_points",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "reward_points": {
+          "name": "reward_points",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "lost_points": {
+          "name": "lost_points",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "purification": {
+          "name": "purification",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "death_reason": {
+          "name": "death_reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "relic_name": {
+          "name": "relic_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "relic_rarity": {
+          "name": "relic_rarity",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "special_event_text": {
+          "name": "special_event_text",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "details": {
+          "name": "details",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "expedition_reports_daily_sender_unique": {
+          "name": "expedition_reports_daily_sender_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "session_id",
+            "date_key",
+            "sender_id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "expedition_reports_stake_positive": {
+          "name": "expedition_reports_stake_positive",
+          "value": "\"expedition_reports\".\"stake\" > 0"
+        },
+        "expedition_reports_outcome_check": {
+          "name": "expedition_reports_outcome_check",
+          "value": "\"expedition_reports\".\"outcome\" in ('survived', 'dead')"
+        },
+        "expedition_reports_strategy_check": {
+          "name": "expedition_reports_strategy_check",
+          "value": "\"expedition_reports\".\"strategy\" in ('steady', 'adventure', 'crazy')"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.expedition_worlds": {
+      "name": "expedition_worlds",
+      "schema": "",
+      "columns": {
+        "session_id": {
+          "name": "session_id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "group_name": {
+          "name": "group_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "boss_name": {
+          "name": "boss_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "boss_max_pollution": {
+          "name": "boss_max_pollution",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "boss_pollution": {
+          "name": "boss_pollution",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "expedition_worlds_boss_max_pollution_positive": {
+          "name": "expedition_worlds_boss_max_pollution_positive",
+          "value": "\"expedition_worlds\".\"boss_max_pollution\" > 0"
+        },
+        "expedition_worlds_boss_pollution_non_negative": {
+          "name": "expedition_worlds_boss_pollution_non_negative",
+          "value": "\"expedition_worlds\".\"boss_pollution\" >= 0"
+        }
+      },
+      "isRLSEnabled": false
+    }
+  },
+  "enums": {},
+  "schemas": {},
+  "sequences": {},
+  "roles": {},
+  "policies": {},
+  "views": {},
+  "_meta": {
+    "columns": {},
+    "schemas": {},
+    "tables": {}
+  }
+}

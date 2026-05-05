@@ -1,4 +1,4 @@
-import { RedisStore } from "../redis-store.js";
+import { RedisStore } from "../infra/redis-store.js";
 import type { PluginStateStore as PluginStateStoreContract } from "./types.js";
 
 export class RedisPluginStateStore implements PluginStateStoreContract {
@@ -21,4 +21,3 @@ export class RedisPluginStateStore implements PluginStateStoreContract {
     return `plugin:${sessionId}:${pluginId}:enabled`;
   }
 }
-

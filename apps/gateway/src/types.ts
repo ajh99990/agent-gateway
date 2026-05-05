@@ -1,3 +1,5 @@
+import type { SchedulerSnapshot } from "./scheduler/types.js";
+
 /**
  * TriggerReason 表示“这一次为什么要触发 agent run”。
  *
@@ -108,6 +110,65 @@ export interface NormalizedMessage {
 }
 
 /**
+ * InboundMessageEvent 是消息入口层交给 event-gateway 的统一事件。
+ *
+ * 不管上游来自 WeFlow SSE、HTTP callback，还是将来的其他来源，
+ * 进入主处理链路之前都要转换成这个结构。
+ */
+export interface InboundMessageEvent {
+  source: string;
+  event: "message.new";
+  sessionId: string;
+  messageKey: string;
+  avatarUrl?: string;
+  sourceName?: string;
+  groupName?: string;
+  content?: string;
+  receivedAtUnixMs: number;
+  normalizedMessage?: NormalizedMessage;
+  raw?: unknown;
+}
+
+export interface MessageHistoryRequest {
+  sessionId: string;
+  groupName?: string;
+  limit: number;
+}
+
+export interface MessageHistoryPage {
+  source: string;
+  hasMore: boolean;
+  messages: NormalizedMessage[];
+}
+
+/**
+ * MessageHistoryProvider 用来把“触发摘要”补成上下文窗口。
+ *
+ * WeFlow 当前会转调 /messages；HTTP callback 源后续可以改成读自己的消息表
+ * 或者从最近消息缓存里取。
+ */
+export interface MessageHistoryProvider {
+  getRecentMessages(request: MessageHistoryRequest): Promise<MessageHistoryPage>;
+}
+
+export interface MessageSourceStatusSnapshot {
+  id: string;
+  connected: boolean;
+  lastReadyAt?: string;
+  lastMessageAt?: string;
+  reconnectCount?: number;
+}
+
+export interface MessageSource {
+  id: string;
+  start(
+    onEvent: (event: InboundMessageEvent) => Promise<void>,
+    signal: AbortSignal,
+  ): Promise<void>;
+  getStatusSnapshot(): MessageSourceStatusSnapshot;
+}
+
+/**
  * 这是 event-gateway 发给 agent-runtime 的核心请求体。
  *
  * 其中最重要的两个数组：
@@ -125,7 +186,7 @@ export interface AgentRunInput {
   recentMessages: NormalizedMessage[];
   botProfile: BotProfile;
   metadata: {
-    source: "weflow";
+    source: string;
     oldestFetchedLocalId?: number;
     newestFetchedLocalId?: number;
   };
@@ -167,12 +228,12 @@ export interface GraphitiWriteBatch {
  * SessionAccumulator 是 event-gateway 的“群级内存状态”。
  *
  * 每个群会在内存里对应一份这样的对象，
- * 用来保存本轮 quiet window 内累计到的 SSE 事件和当前运行状态。
+ * 用来保存本轮 quiet window 内累计到的入站事件和当前运行状态。
  */
 export interface SessionAccumulator {
   sessionId: string;
   groupName?: string;
-  pendingEvents: WeFlowSseMessageEvent[];
+  pendingEvents: InboundMessageEvent[];
   triggerReason: TriggerReason;
   running: boolean;
   dirtyWhileRunning: boolean;
@@ -200,7 +261,10 @@ export interface HealthSnapshot {
   status: "ok";
   uptimeSeconds: number;
   redis: "ok" | "error";
-  sse: SseStatusSnapshot;
+  postgres?: "ok" | "error";
+  scheduler?: SchedulerSnapshot;
+  messageSource: MessageSourceStatusSnapshot;
+  sse?: SseStatusSnapshot;
   sessions: {
     active: number;
   };
