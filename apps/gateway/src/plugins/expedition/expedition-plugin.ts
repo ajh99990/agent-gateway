@@ -28,7 +28,17 @@ export function createExpeditionPlugin(context: PluginBootstrapContext): Gateway
   return {
     id: EXPEDITION_PLUGIN_ID,
     name: "远征",
-    keywords: EXPEDITION_KEYWORDS,
+    commands: [
+      {
+        keywords: EXPEDITION_KEYWORDS,
+        matches(content) {
+          return content === "远征" || content.startsWith("远征 ");
+        },
+        async handle(pluginContext) {
+          return service.handleMessage(pluginContext);
+        },
+      },
+    ],
     scheduledJobs: [
       {
         id: "expedition.daily-settlement",
@@ -50,18 +60,12 @@ export function createExpeditionPlugin(context: PluginBootstrapContext): Gateway
         },
       },
     ],
-    matches(content) {
-      return content === "远征" || content.startsWith("远征 ");
-    },
     async beforeDisable(toggleContext) {
       const replyText = await service.beforeDisable(
         toggleContext.sessionId,
         toggleContext.groupName,
       );
       return { replyText };
-    },
-    async handle(pluginContext) {
-      return service.handleMessage(pluginContext);
     },
   };
 }

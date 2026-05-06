@@ -11,19 +11,30 @@
 
 也就是说，`PluginServices` 不应该变成所有插件专属 service 的大杂货铺。只有多个插件都会用到的能力，才应该放进 `PluginServices`。
 
+当前插件的定义是：
+
+```text
+插件是可按群启停的功能模块。
+commands、scheduledJobs 是插件可以声明的触发方式。
+```
+
+因此插件不一定要处理消息。纯定时推送、每日总结、后台维护任务这类插件，可以没有 `commands`，只声明 `scheduledJobs`。
+
+插件可以通过 `defaultEnabled` 控制未显式配置时的默认启用状态。命令类插件通常默认开启；主动推送类插件建议设置 `defaultEnabled: false`，避免一上线就在所有群主动发消息。
+
 ## 当前目录结构
 
 ```text
 src/plugins/
-  README.md
   index.ts
   types.ts
   plugin-router.ts
   plugin-admin-service.ts
   plugin-state-store.ts
-  message-sender.ts
   checkin/
     checkin-plugin.ts
+  expedition/
+    expedition-plugin.ts
   system/
     plugin-manager-plugin.ts
 ```
@@ -37,6 +48,7 @@ src/plugins/
 重点类型：
 
 - `GatewayPlugin`：单个插件需要实现的接口。
+- `PluginCommand`：插件的消息命令触发器，负责声明关键词、参数化匹配和命令处理函数。
 - `PluginBootstrapContext`：插件初始化时拿到的上下文，适合构造插件内部 store、service 和 job。
 - `PluginContext`：插件处理消息时拿到的上下文。
 - `PluginServices`：插件可使用的公共服务集合。
@@ -49,21 +61,21 @@ src/plugins/
 
 它会：
 
-1. 根据消息内容匹配插件。
+1. 根据消息内容匹配插件的 command。
 2. 判断业务插件在当前群是否开启。
-3. 补拉完整 WeFlow 消息。
+3. 补拉完整消息。
 4. 构造 `PluginContext`。
-5. 调用插件 `handle(context)`。
-6. 如果插件返回 `replyText`，通过 `MessageSender` 发送回复。
+5. 调用 command 的 `handle(context)`。
+6. 如果 command 返回 `replyText`，通过 `MessageSender` 发送回复。
 
 命中插件后，即使插件处理失败，当前消息也不会 fallback 到聊天 agent。
 
 插件匹配顺序是：
 
 ```text
-1. 系统插件优先，支持 keywords 精确命中和 matches(content)
-2. 业务插件精确 keywords 命中
-3. 业务插件 matches(content) 命中
+1. 系统插件 command 优先，支持 keywords 精确命中和 matches(content)
+2. 业务插件 command 精确 keywords 命中
+3. 业务插件 command 的 matches(content) 命中
 ```
 
 这意味着固定指令可以只写 `keywords`，参数化指令需要实现 `matches(content)`。
@@ -71,24 +83,36 @@ src/plugins/
 例如：
 
 ```ts
-matches(content) {
-  return content === "远征" || content.startsWith("远征 ");
-}
+commands: [
+  {
+    keywords: ["远征", "取消远征"],
+    matches(content) {
+      return content === "远征" || content.startsWith("远征 ");
+    },
+    async handle(context) {
+      return service.handleMessage(context);
+    },
+  },
+];
 ```
 
-`keywords` 仍然会做启动期冲突检查。`matches(content)` 是函数逻辑，第一版不做静态冲突检查；如果多个业务插件的 `matches` 都能命中同一条消息，会按插件注册顺序选择第一个。
+command 的 `keywords` 仍然会做启动期冲突检查。`matches(content)` 是函数逻辑，第一版不做静态冲突检查；如果多个业务插件 command 的 `matches` 都能命中同一条消息，会按插件注册顺序选择第一个。
 
 ### `plugin-state-store.ts`
 
 当前用于保存插件在某个群里的启停状态。
 
-它仍然使用 Redis，因为启停状态更接近运行配置和短期控制面。
+它使用 PostgreSQL 的 `plugin_session_states` 表。启停状态是长期配置，需要被 Web 后台、定时插件和管理命令稳定查询。
+
+未写入启停状态时，`pluginState.isEnabled(sessionId, pluginId, plugin.defaultEnabled)` 会使用插件自己的 `defaultEnabled`；如果插件没有声明，则默认开启。
+
+定时类插件可以通过 `pluginState.listEnabledSessions(pluginId, plugin.defaultEnabled)` 找到所有开启该插件的群。
 
 ### `message-sender.ts`
 
 插件发送消息的抽象。
 
-当前实现只是日志占位，后续接入真实微信发送链路时，应优先替换这里，而不是让插件自己直接调用外部发送 API。
+当前实现位于 `src/messaging/senders/message-sender.ts`，只是日志占位。后续接入真实微信发送链路时，应优先替换这里，而不是让插件自己直接调用外部发送 API。
 
 ### `index.ts`
 
@@ -149,7 +173,15 @@ export function createSomePlugin({ someService }: SomePluginDeps): GatewayPlugin
   return {
     id: "some-plugin",
     name: "某插件",
-    keywords: ["某指令"],
+    commands: [
+      {
+        keywords: ["某指令"],
+        async handle(context) {
+          // 处理群聊指令
+          return {};
+        },
+      },
+    ],
     scheduledJobs: [
       {
         id: "some-plugin.daily-job",
@@ -163,15 +195,11 @@ export function createSomePlugin({ someService }: SomePluginDeps): GatewayPlugin
         },
       },
     ],
-    async handle(context) {
-      // 处理群聊指令
-      return {};
-    },
   };
 }
 ```
 
-插件关闭或开启是按群维度的业务状态，不会删除 BullMQ scheduler。定时任务如果要处理群维度业务，应在执行时检查 `pluginState.isEnabled(sessionId, pluginId)`。
+插件关闭或开启是按群维度的业务状态，不会删除 BullMQ scheduler。定时任务如果要处理群维度业务，应在执行时检查 `pluginState.isEnabled(sessionId, pluginId, plugin.defaultEnabled)`。
 
 如果插件关闭前需要取消未完成业务、返还资源或写操作日志，可以实现 `beforeDisable(context)` hook。hook 只处理插件自己的业务状态，不负责管理 BullMQ scheduler。
 
@@ -366,7 +394,7 @@ Store 层只负责数据访问，不应该塞太多游戏规则。
 
 Service 可以组合多个 store 或公共 service。
 
-插件代码应该优先调用 service，而不是直接把复杂业务逻辑写在 `handle(context)` 里。
+插件 command 代码应该优先调用 service，而不是直接把复杂业务逻辑写在 `handle(context)` 里。
 
 ### 5. 通过插件 factory 注入
 
@@ -387,20 +415,17 @@ export function createExpeditionPlugin(context: PluginBootstrapContext): Gateway
   return {
     id: "expedition",
     name: "远征",
-    keywords: ["远征", "取消远征", "我的战报", "我的遗物", "远征排行"],
-    matches(content) {
-      return (
-        content === "远征" ||
-        content.startsWith("远征 ") ||
-        content === "取消远征" ||
-        content === "我的战报" ||
-        content === "我的遗物" ||
-        content === "远征排行"
-      );
-    },
-    async handle(context) {
-      return service.handleCommand(context);
-    },
+    commands: [
+      {
+        keywords: ["远征", "取消远征", "我的战报", "我的遗物", "远征排行"],
+        matches(content) {
+          return content === "远征" || content.startsWith("远征 ");
+        },
+        async handle(context) {
+          return service.handleCommand(context);
+        },
+      },
+    ],
   };
 }
 ```
@@ -447,7 +472,7 @@ export function createGatewayPlugins(context: PluginBootstrapContext): GatewayPl
 
 ## 简单插件的推荐结构
 
-如果插件只是关键词回复，或只使用 `pluginData` 保存少量状态，可以只建一个文件：
+如果插件只是 command 关键词回复，或只使用 `pluginData` 保存少量状态，可以只建一个文件：
 
 ```text
 src/plugins/some-plugin/some-plugin.ts
@@ -462,19 +487,23 @@ export function createSomePlugin(): GatewayPlugin {
   return {
     id: "some-plugin",
     name: "某插件",
-    keywords: ["某指令"],
-    async handle(context) {
-      await context.services.pluginData.setValue(
-        "some-plugin",
-        context.sessionId,
-        "last-used-at",
-        new Date().toISOString(),
-      );
+    commands: [
+      {
+        keywords: ["某指令"],
+        async handle(context) {
+          await context.services.pluginData.setValue(
+            "some-plugin",
+            context.sessionId,
+            "last-used-at",
+            new Date().toISOString(),
+          );
 
-      return {
-        replyText: "处理完成。",
-      };
-    },
+          return {
+            replyText: "处理完成。",
+          };
+        },
+      },
+    ],
   };
 }
 ```
@@ -501,6 +530,8 @@ PostgreSQL 适合保存长期事实数据：
 - 积分流水。
 - 用户操作日志。
 - 插件业务数据。
+- 插件按群启停状态。
+- Gateway 已见过的群会话。
 - 图片链接元数据。
 - 群聊记录。
 - 大段文本。
@@ -511,7 +542,6 @@ Redis 继续负责短期运行状态：
 - SSE 去重。
 - quiet window。
 - 群级运行锁。
-- 插件启停开关。
 - 热点缓存。
 
 ## 开发 checklist

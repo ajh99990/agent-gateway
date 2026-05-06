@@ -1,5 +1,6 @@
 import type { Logger } from "pino";
 import type { AppConfig } from "../config.js";
+import type { GatewaySessionStore } from "../db/stores/gateway-session-store.js";
 import { RedisStore } from "../infra/redis-store.js";
 import { TaskQueue } from "../infra/task-queue.js";
 import { AgentRuntimeClient } from "../integrations/agent-runtime-client.js";
@@ -56,6 +57,7 @@ export class EventGateway {
     private readonly agentRuntimeClient: AgentRuntimeClient,
     private readonly graphitiClient: GraphitiClient,
     private readonly pluginRouter: PluginRouter,
+    private readonly gatewaySessions: GatewaySessionStore,
   ) {
     this.graphitiQueue = new TaskQueue(2, logger, "graphiti");
   }
@@ -166,6 +168,12 @@ export class EventGateway {
       this.logger.debug({ event }, "忽略机器人自己发出的入站事件，避免自触发");
       return;
     }
+
+    await this.gatewaySessions.upsertSeen({
+      sessionId: event.sessionId,
+      groupName: event.groupName,
+      lastSeenAt: new Date(event.receivedAtUnixMs),
+    });
 
     const isFirstSeen = await this.redis.claimInboundMessageKey(event.source, event.messageKey);
     if (!isFirstSeen) {

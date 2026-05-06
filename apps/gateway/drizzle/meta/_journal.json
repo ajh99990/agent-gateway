@@ -50,6 +50,13 @@
       "when": 1777936463896,
       "tag": "0006_romantic_triathlon",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1778076268794,
+      "tag": "0007_bumpy_jazinda",
+      "breakpoints": true
     }
   ]
 }

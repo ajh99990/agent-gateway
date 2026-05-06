@@ -13,38 +13,42 @@ export function createPluginManagerPlugin(_context: PluginBootstrapContext): Gat
   return {
     id: "plugin-manager",
     name: "插件管理",
-    keywords: [LIST_COMMAND],
     system: true,
-    matches(content) {
-      return (
-        content === LIST_COMMAND ||
-        content.startsWith(ENABLE_PREFIX) ||
-        content.startsWith(DISABLE_PREFIX)
-      );
-    },
-    async handle(context) {
-      if (!isAdmin(context)) {
-        return {
-          replyText: "你没有权限管理插件。",
-        };
-      }
+    commands: [
+      {
+        keywords: [LIST_COMMAND],
+        matches(content) {
+          return (
+            content === LIST_COMMAND ||
+            content.startsWith(ENABLE_PREFIX) ||
+            content.startsWith(DISABLE_PREFIX)
+          );
+        },
+        async handle(context) {
+          if (!isAdmin(context)) {
+            return {
+              replyText: "你没有权限管理插件。",
+            };
+          }
 
-      if (context.content === LIST_COMMAND) {
-        return listPlugins(context);
-      }
+          if (context.content === LIST_COMMAND) {
+            return listPlugins(context);
+          }
 
-      if (context.content.startsWith(ENABLE_PREFIX)) {
-        return setPluginEnabled(context, ENABLE_PREFIX, true);
-      }
+          if (context.content.startsWith(ENABLE_PREFIX)) {
+            return setPluginEnabled(context, ENABLE_PREFIX, true);
+          }
 
-      if (context.content.startsWith(DISABLE_PREFIX)) {
-        return setPluginEnabled(context, DISABLE_PREFIX, false);
-      }
+          if (context.content.startsWith(DISABLE_PREFIX)) {
+            return setPluginEnabled(context, DISABLE_PREFIX, false);
+          }
 
-      return {
-        replyText: "不支持的插件管理命令。",
-      };
-    },
+          return {
+            replyText: "不支持的插件管理命令。",
+          };
+        },
+      },
+    ],
   };
 }
 
@@ -70,7 +74,12 @@ async function listPlugins(context: PluginContext): Promise<PluginHandleResult> 
 
   const lines = await Promise.all(
     plugins.map(async (plugin) => {
-      const enabled = await context.services.pluginState.isEnabled(context.sessionId, plugin.id);
+      const runtimePlugin = context.services.plugins.getPluginById(plugin.id);
+      const enabled = await context.services.pluginState.isEnabled(
+        context.sessionId,
+        plugin.id,
+        runtimePlugin?.defaultEnabled,
+      );
       return `${plugin.name}：${enabled ? "已开启" : "已关闭"}`;
     }),
   );
@@ -105,14 +114,18 @@ async function setPluginEnabled(
     };
   }
 
-  const currentEnabled = await context.services.pluginState.isEnabled(context.sessionId, plugin.id);
+  const runtimePlugin = context.services.plugins.getPluginById(plugin.id);
+  const currentEnabled = await context.services.pluginState.isEnabled(
+    context.sessionId,
+    plugin.id,
+    runtimePlugin?.defaultEnabled,
+  );
   if (currentEnabled === enabled) {
     return {
       replyText: `${plugin.name}插件已经是${enabled ? "开启" : "关闭"}状态。`,
     };
   }
 
-  const runtimePlugin = context.services.plugins.getPluginById(plugin.id);
   const hookResult = enabled
     ? await runtimePlugin?.beforeEnable?.({
         sessionId: context.sessionId,

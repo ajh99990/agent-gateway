@@ -17,6 +17,7 @@ import type { Scheduler } from "../../../scheduler/types.js";
 import { getBusinessDateKey } from "../../../time.js";
 import type {
   GatewayPlugin,
+  PluginCommand,
   PluginCatalog,
   PluginContext,
   PluginDataStore,
@@ -143,7 +144,12 @@ async function runCheckin(
 ): Promise<void> {
   const user = SMOKE_USERS[input.userIndex]!;
   const context = createContext(input.content, user, services, input.timestampMs);
-  const result = await plugin.handle(context);
+  const command = findCommand(plugin, input.content);
+  if (!command) {
+    throw new Error(`签到插件未匹配指令：${input.content}`);
+  }
+
+  const result = await command.handle(context);
 
   printSection(`${context.message.senderName}: ${input.content}`);
   console.log(result.replyText ?? "(no reply)");
@@ -152,6 +158,14 @@ async function runCheckin(
   if (expectedText && !result.replyText?.trim()) {
     throw new Error("签到插件没有返回回复文本");
   }
+}
+
+function findCommand(plugin: GatewayPlugin, content: string): PluginCommand | undefined {
+  return plugin.commands?.find(
+    (command) =>
+      command.matches?.(content) ||
+      command.keywords?.some((keyword) => keyword.trim() === content),
+  );
 }
 
 function createContext(
@@ -262,6 +276,15 @@ function createEnabledPluginState(): PluginStateStore {
       return true;
     },
     async setEnabled() {},
+    async listEnabledSessions() {
+      return [
+        {
+          sessionId: SMOKE_SESSION_ID,
+          groupName: SMOKE_GROUP_NAME,
+          lastSeenAt: new Date(),
+        },
+      ];
+    },
   };
 }
 

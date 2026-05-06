@@ -117,7 +117,7 @@ Worker 负责消费 job。
 export interface GatewayPlugin {
   id: string;
   name: string;
-  keywords: string[];
+  commands?: PluginCommand[];
   scheduledJobs?: ScheduledJobDefinition[];
 }
 ```
@@ -129,6 +129,14 @@ createSomePlugin({ someService }) {
   return {
     id: "some-plugin",
     name: "某插件",
+    commands: [
+      {
+        keywords: ["某指令"],
+        async handle(context) {
+          return someService.handleCommand(context);
+        },
+      },
+    ],
     scheduledJobs: [
       {
         id: "some-plugin.daily-job",
@@ -138,9 +146,6 @@ createSomePlugin({ someService }) {
         },
       },
     ],
-    async handle(context) {
-      // 处理群聊指令
-    },
   };
 }
 ```
@@ -177,10 +182,12 @@ PluginState 负责判断某个群是否启用插件。
 ```text
 job 触发
 -> 找到需要处理的 session
--> 检查 pluginState.isEnabled(sessionId, pluginId)
+-> 检查 pluginState.isEnabled(sessionId, pluginId, plugin.defaultEnabled)
 -> 启用则处理
 -> 关闭则跳过或执行业务定义的清理逻辑
 ```
+
+纯定时插件如果要找出所有已开启的群，可以通过 `pluginState.listEnabledSessions(pluginId, plugin.defaultEnabled)` 读取 PostgreSQL 中的会话登记和插件状态。主动推送类插件建议设置 `defaultEnabled: false`，避免未配置的群被自动纳入定时任务。
 
 插件还可以实现启停 hook：
 

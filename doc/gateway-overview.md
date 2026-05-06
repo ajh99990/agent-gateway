@@ -26,7 +26,7 @@
 gateway 运行时依赖这些外部组件：
 
 - PostgreSQL：保存长期数据，例如积分、插件业务表、入站消息、操作运行记录。
-- Redis：保存短期运行状态，例如消息去重、quiet window 锁、插件启停、BullMQ 队列。
+- Redis：保存短期运行状态，例如消息去重、quiet window 锁、BullMQ 队列。
 - BullMQ：基于 Redis 的定时任务和后台队列基础设施。
 - Agent Runtime：未被插件处理的聊天消息会被整理后发给它。
 - Graphiti MCP：可选，用于写入长期记忆。
@@ -164,6 +164,7 @@ db/
 - `stores/` 负责直接读写数据库。
 - `services/` 负责通用业务语义，例如积分。
 - 插件私有复杂表可以放在插件目录，但必须从 `src/db/schema/index.ts` 汇总导出。
+- `gateway_sessions` 和 `plugin_session_states` 保存会话登记和插件按群启停状态，供定时类插件查找目标群。
 
 数据库和 migration 细节看 `doc/gateway-db-layer.md`。
 

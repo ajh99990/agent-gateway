@@ -7,6 +7,7 @@ import type {
 import type {
   GatewayPlugin,
   PluginCatalog,
+  PluginCommand,
   PluginCommonServices,
   PluginDescriptor,
   PluginServices,
@@ -24,9 +25,14 @@ interface MessageKeyHint {
   senderUsername?: string;
 }
 
+interface CommandMatch {
+  plugin: GatewayPlugin;
+  command: PluginCommand;
+}
+
 export class PluginRouter {
   private readonly plugins: GatewayPlugin[];
-  private readonly keywordIndex = new Map<string, GatewayPlugin>();
+  private readonly keywordIndex = new Map<string, CommandMatch>();
   private readonly catalog: PluginCatalog;
   private readonly services: PluginServices;
 
@@ -50,13 +56,18 @@ export class PluginRouter {
       return false;
     }
 
-    const plugin = this.findPlugin(content);
-    if (!plugin) {
+    const match = this.findCommand(content);
+    if (!match) {
       return false;
     }
+    const { plugin, command } = match;
 
     if (!plugin.system) {
-      const enabled = await this.services.pluginState.isEnabled(event.sessionId, plugin.id);
+      const enabled = await this.services.pluginState.isEnabled(
+        event.sessionId,
+        plugin.id,
+        plugin.defaultEnabled,
+      );
       if (!enabled) {
         this.services.logger.debug(
           {
@@ -116,7 +127,7 @@ export class PluginRouter {
     }
 
     try {
-      const result = await plugin.handle({
+      const result = await command.handle({
         sessionId: event.sessionId,
         groupName: event.groupName,
         content,
@@ -165,22 +176,35 @@ export class PluginRouter {
     }
   }
 
-  private findPlugin(content: string): GatewayPlugin | undefined {
-    const systemPlugin = this.plugins.find(
-      (plugin) => plugin.system && pluginMatches(plugin, content),
-    );
-    if (systemPlugin) {
-      return systemPlugin;
+  private findCommand(content: string): CommandMatch | undefined {
+    for (const plugin of this.plugins) {
+      if (!plugin.system) {
+        continue;
+      }
+
+      const command = plugin.commands?.find((candidate) => commandMatches(candidate, content));
+      if (command) {
+        return { plugin, command };
+      }
     }
 
-    const keywordPlugin = this.keywordIndex.get(content);
-    if (keywordPlugin) {
-      return keywordPlugin;
+    const keywordMatch = this.keywordIndex.get(content);
+    if (keywordMatch) {
+      return keywordMatch;
     }
 
-    return this.plugins.find(
-      (plugin) => !plugin.system && plugin.matches?.(content),
-    );
+    for (const plugin of this.plugins) {
+      if (plugin.system) {
+        continue;
+      }
+
+      const command = plugin.commands?.find((candidate) => candidate.matches?.(content));
+      if (command) {
+        return { plugin, command };
+      }
+    }
+
+    return undefined;
   }
 
   private async loadMessageForEvent(event: InboundMessageEvent): Promise<NormalizedMessage | null> {
@@ -247,20 +271,22 @@ export class PluginRouter {
         throw new Error(`插件 ${plugin.id} 缺少有效中文名`);
       }
 
-      for (const keyword of plugin.keywords) {
-        const normalizedKeyword = keyword.trim();
-        if (!normalizedKeyword) {
-          throw new Error(`插件 ${plugin.name} 声明了空关键词`);
-        }
+      for (const command of plugin.commands ?? []) {
+        for (const keyword of command.keywords ?? []) {
+          const normalizedKeyword = keyword.trim();
+          if (!normalizedKeyword) {
+            throw new Error(`插件 ${plugin.name} 声明了空关键词`);
+          }
 
-        const existing = this.keywordIndex.get(normalizedKeyword);
-        if (existing) {
-          throw new Error(
-            `插件关键词冲突："${normalizedKeyword}" 同时被 "${existing.name}" 和 "${plugin.name}" 声明`,
-          );
-        }
+          const existing = this.keywordIndex.get(normalizedKeyword);
+          if (existing) {
+            throw new Error(
+              `插件关键词冲突："${normalizedKeyword}" 同时被 "${existing.plugin.name}" 和 "${plugin.name}" 声明`,
+            );
+          }
 
-        this.keywordIndex.set(normalizedKeyword, plugin);
+          this.keywordIndex.set(normalizedKeyword, { plugin, command });
+        }
       }
     }
   }
@@ -270,13 +296,27 @@ function toDescriptor(plugin: GatewayPlugin): PluginDescriptor {
   return {
     id: plugin.id,
     name: plugin.name,
-    keywords: [...plugin.keywords],
+    keywords: getPluginKeywords(plugin),
     system: Boolean(plugin.system),
   };
 }
 
-function pluginMatches(plugin: GatewayPlugin, content: string): boolean {
-  return Boolean(plugin.matches?.(content)) || plugin.keywords.includes(content);
+function commandMatches(command: PluginCommand, content: string): boolean {
+  return (
+    Boolean(command.matches?.(content)) ||
+    Boolean(command.keywords?.some((keyword) => keyword.trim() === content))
+  );
+}
+
+function getPluginKeywords(plugin: GatewayPlugin): string[] {
+  return Array.from(
+    new Set(
+      (plugin.commands ?? [])
+        .flatMap((command) => command.keywords ?? [])
+        .map((keyword) => keyword.trim())
+        .filter(Boolean),
+    ),
+  );
 }
 
 function parseMessageKey(messageKey: string): MessageKeyHint {

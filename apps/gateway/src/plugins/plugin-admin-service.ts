@@ -31,7 +31,9 @@ export class PluginAdminService {
         const system = Boolean(plugin.system);
         return {
           ...toDescriptor(plugin),
-          enabled: system ? true : await this.pluginState.isEnabled(sessionId, plugin.id),
+          enabled: system
+            ? true
+            : await this.pluginState.isEnabled(sessionId, plugin.id, plugin.defaultEnabled),
           manageable: !system,
         };
       }),
@@ -52,7 +54,11 @@ export class PluginAdminService {
       throw new PluginAdminError("System plugins cannot be enabled or disabled via admin API", 400);
     }
 
-    const currentEnabled = await this.pluginState.isEnabled(sessionId, plugin.id);
+    const currentEnabled = await this.pluginState.isEnabled(
+      sessionId,
+      plugin.id,
+      plugin.defaultEnabled,
+    );
     if (currentEnabled === enabled) {
       return {
         ...toDescriptor(plugin),
@@ -90,7 +96,18 @@ function toDescriptor(plugin: GatewayPlugin): PluginDescriptor {
   return {
     id: plugin.id,
     name: plugin.name,
-    keywords: [...plugin.keywords],
+    keywords: getPluginKeywords(plugin),
     system: Boolean(plugin.system),
   };
+}
+
+function getPluginKeywords(plugin: GatewayPlugin): string[] {
+  return Array.from(
+    new Set(
+      (plugin.commands ?? [])
+        .flatMap((command) => command.keywords ?? [])
+        .map((keyword) => keyword.trim())
+        .filter(Boolean),
+    ),
+  );
 }

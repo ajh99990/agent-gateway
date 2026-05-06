@@ -21,6 +21,7 @@ import { createLogger } from "../../../infra/logger.js";
 import { createGatewayPlugins } from "../../index.js";
 import type {
   GatewayPlugin,
+  PluginCommand,
   PluginCatalog,
   PluginContext,
   PluginDataStore,
@@ -90,7 +91,7 @@ async function main(): Promise<void> {
     if (!expedition) {
       throw new Error("createGatewayPlugins 未注册远征插件");
     }
-    if (!expedition.matches?.("远征 疯狂 梭哈")) {
+    if (!findCommand(expedition, "远征 疯狂 梭哈")) {
       throw new Error("远征插件未匹配带参数远征指令");
     }
     if (expedition.scheduledJobs?.length !== 1) {
@@ -204,7 +205,12 @@ async function runCommand(
   },
 ): Promise<void> {
   const context = createContext(input.content, SMOKE_USERS[input.userIndex]!, services, input.messageTimestampMs);
-  const result = await expedition.handle(context);
+  const command = findCommand(expedition, input.content);
+  if (!command) {
+    throw new Error(`远征插件未匹配指令：${input.content}`);
+  }
+
+  const result = await command.handle(context);
   printSection(`${context.message.senderName}: ${input.content}`);
   console.log(result.replyText ?? "(no reply)");
 }
@@ -269,6 +275,14 @@ function createContext(
   };
 }
 
+function findCommand(plugin: GatewayPlugin, content: string): PluginCommand | undefined {
+  return plugin.commands?.find(
+    (command) =>
+      command.matches?.(content) ||
+      command.keywords?.some((keyword) => keyword.trim() === content),
+  );
+}
+
 async function printBalances(points: DefaultPointsService): Promise<void> {
   printSection("balances");
   for (const user of SMOKE_USERS) {
@@ -297,6 +311,15 @@ function createEnabledPluginState(): PluginStateStore {
       return true;
     },
     async setEnabled() {},
+    async listEnabledSessions() {
+      return [
+        {
+          sessionId: SMOKE_SESSION_ID,
+          groupName: SMOKE_GROUP_NAME,
+          lastSeenAt: new Date(),
+        },
+      ];
+    },
   };
 }
 

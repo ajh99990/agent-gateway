@@ -31,8 +31,15 @@ export interface PluginCatalog {
 }
 
 export interface PluginStateStore {
-  isEnabled(sessionId: string, pluginId: string): Promise<boolean>;
+  isEnabled(sessionId: string, pluginId: string, defaultEnabled?: boolean): Promise<boolean>;
   setEnabled(sessionId: string, pluginId: string, enabled: boolean): Promise<void>;
+  listEnabledSessions(pluginId: string, defaultEnabled?: boolean): Promise<PluginEnabledSession[]>;
+}
+
+export interface PluginEnabledSession {
+  sessionId: string;
+  groupName?: string;
+  lastSeenAt: Date;
 }
 
 export interface PluginDataStore {
@@ -142,11 +149,19 @@ export interface PluginToggleResult {
 export interface GatewayPlugin {
   id: string;
   name: string;
-  keywords: string[];
+  description?: string;
+  defaultEnabled?: boolean;
   system?: boolean;
+  commands?: PluginCommand[];
   scheduledJobs?: ScheduledJobDefinition[];
-  matches?(content: string): boolean;
   beforeEnable?(context: PluginToggleContext): Promise<PluginToggleResult | void>;
   beforeDisable?(context: PluginToggleContext): Promise<PluginToggleResult | void>;
+}
+
+export interface PluginCommand {
+  id?: string;
+  name?: string;
+  keywords?: string[];
+  matches?(content: string): boolean;
   handle(context: PluginContext): Promise<PluginHandleResult>;
 }

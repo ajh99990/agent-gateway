@@ -1,6 +1,7 @@
 import { loadConfig } from "./config.js";
 import {
   DefaultPointsService,
+  GatewaySessionStore,
   InboundMessageStore,
   PostgresPluginOperationRunStore,
   PointsStore,
@@ -20,7 +21,7 @@ import { WeFlowMessageSource } from "./messaging/sources/weflow-message-source.j
 import { createGatewayPlugins } from "./plugins/index.js";
 import { PluginAdminService } from "./plugins/plugin-admin-service.js";
 import { PluginRouter } from "./plugins/plugin-router.js";
-import { RedisPluginStateStore } from "./plugins/plugin-state-store.js";
+import { PostgresPluginStateStore } from "./plugins/plugin-state-store.js";
 import type { PluginCommonServices } from "./plugins/types.js";
 import { BullMqScheduler } from "./scheduler/index.js";
 
@@ -43,6 +44,7 @@ async function main(): Promise<void> {
   const redisStore = new RedisStore(config, logger);
   const postgresStore = new PostgresStore(config, logger);
   const inboundMessageStore = new InboundMessageStore(postgresStore.db);
+  const gatewaySessionStore = new GatewaySessionStore(postgresStore.db);
   const weflowMessageSource = new WeFlowMessageSource(new WeFlowClient(config, logger), config);
   const wechatHttpMessageSource = new WechatHttpMessageSource(
     config,
@@ -55,7 +57,7 @@ async function main(): Promise<void> {
     config.messageSource === "wechat-http" ? wechatHttpMessageSource.getRoutes() : [];
   const agentRuntimeClient = new AgentRuntimeClient(config, logger);
   const graphitiClient = new GraphitiClient(config, logger);
-  const pluginStateStore = new RedisPluginStateStore(redisStore);
+  const pluginStateStore = new PostgresPluginStateStore(postgresStore.db);
   const pluginDataStore = new PostgresPluginDataStore(postgresStore.db);
   const operationRunStore = new PostgresPluginOperationRunStore(postgresStore.db);
   const pointsStore = new PointsStore(postgresStore.db);
@@ -105,6 +107,7 @@ async function main(): Promise<void> {
     agentRuntimeClient,
     graphitiClient,
     pluginRouter,
+    gatewaySessionStore,
   );
 
   const httpServer = config.enableHealthServer

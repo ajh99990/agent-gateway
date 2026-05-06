@@ -13,7 +13,14 @@ WeFlow SSE
 -> 异步写 Graphiti
 ```
 
-插件系统的目标不是替代聊天 agent，而是在进入 quiet window 之前增加一层确定性分流。像 `签到` 这种明确命令，不需要交给聊天 agent 判断，可以直接由对应插件处理并发送回复。
+插件系统的目标不是替代聊天 agent，而是在进入 quiet window 之前增加一层确定性分流。像 `签到` 这种明确命令，不需要交给聊天 agent 判断，可以直接由对应插件的 command 处理并发送回复。
+
+当前实现里，插件已经不再等同于“关键词处理器”。更准确的定义是：
+
+```text
+插件是可按群启停的功能模块。
+commands、scheduledJobs 是插件可以声明的触发方式。
+```
 
 ## 已确认需求
 
@@ -27,31 +34,40 @@ WeFlow SSE
 
    如果插件命中并完成处理，本条消息不再进入现有的 quiet window 和 agent-runtime 链路。
 
-2. 插件关键词是数组。
+2. 插件可以声明 commands，每个 command 可以有自己的关键词数组。
 
-   一个插件可以声明多个完全匹配关键词，例如：
+   一个 command 可以声明多个完全匹配关键词，例如：
 
    ```ts
-   keywords: ["签到", "打卡"]
+   commands: [
+     {
+       keywords: ["签到", "打卡"],
+       async handle(context) {
+         return checkin(context);
+       },
+     },
+   ]
    ```
 
    第一版只做 `content.trim()` 后的完全匹配，不做模糊匹配、正则匹配或 LLM 判断。
 
 3. 一条消息最多只由一个插件处理。
 
-   启动时需要检查关键词冲突。如果两个普通插件声明了同一个关键词，服务应该启动失败，而不是依赖注册顺序决定优先级。
+   启动时需要检查 command 关键词冲突。如果两个普通插件声明了同一个关键词，服务应该启动失败，而不是依赖注册顺序决定优先级。
 
 4. 普通插件默认启用，且启停状态按群维度保存。
 
    例如 A 群关闭了 `签到` 插件，不影响 B 群继续使用 `签到` 插件。
 
-5. 插件启停状态需要持久化到 Redis。
+5. 插件启停状态需要持久化到 PostgreSQL。
 
-   未设置状态时默认启用。推荐 Redis key 形态：
+   未设置状态时使用插件自己的 `defaultEnabled`。如果插件没有声明，则默认启用。当前使用 `plugin_session_states` 表保存显式启停状态：
 
    ```text
-   {REDIS_KEY_PREFIX}:plugin:{sessionId}:{pluginId}:enabled
+   plugin_id + session_id -> enabled
    ```
+
+   PostgreSQL 存储让 Web 后台和纯定时插件都可以查询“哪些群开启了某个插件”。
 
 6. 插件命中且启用后，由插件处理消息，然后调用统一的发送消息接口。
 
@@ -61,7 +77,7 @@ WeFlow SSE
 
    原因是插件命中代表这条消息已经被识别为确定性业务命令。失败时应该记录错误，必要时通过发送接口返回通用失败提示，但不再交给 agent-runtime 继续猜测。
 
-8. 普通插件被关闭后，它的关键词不再拦截消息。
+8. 普通插件被关闭后，它的 commands 不再拦截消息。
 
    例如当前群关闭了 `签到` 插件后，用户发送：
 
@@ -117,7 +133,7 @@ WeFlow SSE
 -> 管理插件查找中文名为“签到”的插件
 -> 如果目标插件不存在，回复不存在
 -> 如果目标插件已经关闭，回复已经是关闭状态
--> 如果目标插件仍启用，写 Redis 关闭它并回复成功
+-> 如果目标插件仍启用，写 PostgreSQL 关闭它并回复成功
 -> 结束，不进入聊天 agent
 ```
 
@@ -160,11 +176,11 @@ PLUGIN_ADMIN_WECHAT_IDS=wxid_xxx,wxid_yyy
 
 ## 发送者身份获取
 
-插件分流的关键词判断发生在 SSE 入口，但 SSE 摘要事件里未必包含稳定的发送者微信 ID。
+插件分流的 command 判断发生在消息入口，但摘要事件里未必包含稳定的发送者微信 ID。
 
 因此第一版采用两阶段策略：
 
-1. 在 SSE 入口先用 `event.content?.trim()` 做关键词匹配。
+1. 在消息入口先用 `event.content?.trim()` 做 command 匹配。
 2. 如果命中了系统插件，或者命中了当前群启用中的普通插件，就调用 WeFlow `/messages` 补拉最近消息，定位对应的完整消息，获得 `senderId`、`localId` 等字段。
 
 这样插件路径仍然绕过聊天 agent，但插件执行时默认可以获得比 SSE 摘要更可靠的身份信息。这个选择会让插件路径多一次 WeFlow API 请求，但可以避免绝大多数插件各自重复处理 senderId 问题。
@@ -187,8 +203,15 @@ PLUGIN_ADMIN_WECHAT_IDS=wxid_xxx,wxid_yyy
 export interface GatewayPlugin {
   id: string;
   name: string;
-  keywords: string[];
+  defaultEnabled?: boolean;
   system?: boolean;
+  commands?: PluginCommand[];
+  scheduledJobs?: ScheduledJobDefinition[];
+}
+
+export interface PluginCommand {
+  keywords?: string[];
+  matches?(content: string): boolean;
   handle(context: PluginContext): Promise<PluginHandleResult>;
 }
 
@@ -235,8 +258,8 @@ apps/gateway/src/plugins/
 
 - `types.ts` 定义插件接口和上下文类型。
 - `index.ts` 维护插件注册列表。
-- `plugin-router.ts` 负责关键词索引、冲突检查、插件启停判断和路由。
-- `plugin-state-store.ts` 通过 Redis 保存按群插件状态。
+- `plugin-router.ts` 负责 command 关键词索引、冲突检查、插件启停判断和路由。
+- `plugin-state-store.ts` 通过 PostgreSQL 保存按群插件状态。
 - `message-sender.ts` 提供发送消息占位接口。
 - `system/plugin-manager-plugin.ts` 实现管理插件。
 - `checkin/checkin-plugin.ts` 作为第一个业务插件示例。
@@ -261,11 +284,11 @@ handleIncomingEvent(event)
 ```text
 读取 event.content?.trim()
 -> 检查是否命中管理插件命令
--> 检查是否命中普通插件关键词
+-> 检查是否命中普通插件 command
 -> 如果未命中，返回 not handled
 -> 如果命中普通插件但当前群已禁用，返回 not handled
 -> 补拉 /messages 定位完整消息
--> 执行插件 handle()
+-> 执行 command handle()
 -> 如果返回 replyText，调用 sendMessage()
 -> 返回 handled
 ```
@@ -285,16 +308,16 @@ quiet window
 
 命中并启用普通插件的消息不进入 agent-runtime，也不进入 quiet window。
 
-普通插件关闭后，它的关键词不再拦截消息，因此会继续进入现有 agent 链路。
+普通插件关闭后，它的 command 不再拦截消息，因此会继续进入现有 agent 链路。
 
 管理插件命令永远由管理插件处理，处理完成后不进入 agent-runtime。
 
 ## 后续实现顺序建议
 
 1. 增加插件相关类型和目录结构。
-2. 增加 Redis 插件状态存储。
+2. 增加 PostgreSQL 插件状态存储。
 3. 增加发送消息占位客户端。
-4. 实现插件注册表和启动时关键词冲突检查。
+4. 实现插件注册表和启动时 command 关键词冲突检查。
 5. 实现管理插件。
 6. 实现一个最小 `签到` 插件作为验证样例。
 7. 在 `EventGateway.handleIncomingEvent()` 的 Redis 去重之后接入插件路由。

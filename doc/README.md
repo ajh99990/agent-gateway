@@ -82,7 +82,7 @@
 
 - `PluginServices` 应该放什么。
 - 插件私有 store/service 应该如何注入。
-- 参数化指令如何用 `matches(content)` 匹配。
+- command 触发器和参数化指令如何用 `matches(content)` 匹配。
 - 插件自建表时的 schema/migration/store/service 流程。
 - 简单插件和复杂插件的推荐结构。
 

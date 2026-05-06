@@ -130,6 +130,7 @@ MessageSource
 -> EventGateway.handleIncomingEvent()
 -> 群聊过滤
 -> 机器人自发消息过滤
+-> 登记 gateway_sessions
 -> Redis messageKey 去重
 -> PluginRouter.tryHandle()
    -> 命中插件：插件处理并结束
@@ -153,6 +154,8 @@ MessageSource
 3. 机器人自己发出的消息会被忽略，避免自触发。
 4. 通过 Redis `claimInboundMessageKey(source, messageKey)` 做去重。
 
+通过基础过滤后，gateway 会把群会话 upsert 到 `gateway_sessions`，用于插件按群启停和纯定时插件查询目标群。
+
 去重 key 带上 `source`，所以不同消息源不会互相污染。
 
 ## 插件短路
@@ -169,7 +172,7 @@ PluginRouter.tryHandle(event)
 - 普通插件只有在当前群启用时才会处理。
 - 命中插件后，不再进入 quiet window，也不会调用 agent-runtime。
 - 插件失败后不 fallback 到 agent-runtime。
-- 普通插件关闭后，它的关键词不再拦截，会继续走聊天主链路。
+- 普通插件关闭后，它的 command 不再拦截消息，会继续走聊天主链路。
 
 插件开发细节看 `doc/gateway-plugin-development.md`。
 

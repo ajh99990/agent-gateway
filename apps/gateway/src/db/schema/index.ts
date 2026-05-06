@@ -1,3 +1,4 @@
+export * from "./gateway-sessions.js";
 export * from "./inbound-messages.js";
 export * from "./plugin-data.js";
 export * from "./plugin-operation-runs.js";
