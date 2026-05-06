@@ -11,6 +11,8 @@ export interface SendMessageInput {
   groupName?: string;
   text: string;
   replyToMessage?: NormalizedMessage;
+  atSender?: boolean;
+  atWxids?: string[];
 }
 
 export interface OutboundMessageSender {
@@ -134,6 +136,8 @@ export interface PluginContext {
 
 export interface PluginHandleResult {
   replyText?: string;
+  atSender?: boolean;
+  atWxids?: string[];
 }
 
 export interface PluginToggleContext {

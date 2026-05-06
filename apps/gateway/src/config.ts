@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { BotProfile } from "./types.js";
 
 export type MessageSourceKind = "weflow" | "wechat-http";
+export type MessageSenderKind = "log" | "wechat-admin";
 
 /**
  * 环境变量里很多值是字符串，比如 "true"、"120"、"a,b,c"。
@@ -68,6 +69,7 @@ const envSchema = z.object({
   RUN_LOCK_TTL_SECONDS: z.string().default("120"),
   DATABASE_URL: z.string().url(),
   MESSAGE_SOURCE: z.enum(["weflow", "wechat-http"]).default("weflow"),
+  MESSAGE_SENDER: z.enum(["log", "wechat-admin"]).default("log"),
   WEFLOW_BASE_URL: z.string().url().default("http://127.0.0.1:5031"),
   WEFLOW_ACCESS_TOKEN: z.string().optional(),
   WEFLOW_SSE_PATH: z.string().default("/api/v1/push/messages"),
@@ -78,6 +80,12 @@ const envSchema = z.object({
   WECHAT_ROBOT_WXID: z.string().optional(),
   WECHAT_CALLBACK_TOKEN: z.string().optional(),
   WECHAT_HTTP_HISTORY_LIMIT: z.string().default("300"),
+  WECHAT_ADMIN_BASE_URL: z.preprocess(emptyStringToUndefined, z.string().url().optional()),
+  WECHAT_ADMIN_API_TOKEN: z.string().optional(),
+  WECHAT_ADMIN_ROBOT_ID: z.string().optional(),
+  WECHAT_ADMIN_SEND_TIMEOUT_MS: z.string().default("10000"),
+  WECHAT_ADMIN_SEND_MIN_INTERVAL_MS: z.string().default("1000"),
+  WECHAT_ADMIN_TLS_REJECT_UNAUTHORIZED: z.string().optional(),
   GROUP_ONLY: z.string().optional(),
   QUIET_WINDOW_MS: z.string().default("8000"),
   MENTION_QUIET_WINDOW_MS: z.string().default("2000"),
@@ -121,6 +129,7 @@ export interface AppConfig {
   runLockTtlSeconds: number;
   databaseUrl: string;
   messageSource: MessageSourceKind;
+  messageSender: MessageSenderKind;
   weflowBaseUrl: string;
   weflowAccessToken?: string;
   weflowSsePath: string;
@@ -131,6 +140,12 @@ export interface AppConfig {
   wechatRobotWxid?: string;
   wechatCallbackToken?: string;
   wechatHttpHistoryLimit: number;
+  wechatAdminBaseUrl?: string;
+  wechatAdminApiToken?: string;
+  wechatAdminRobotId?: number;
+  wechatAdminSendTimeoutMs: number;
+  wechatAdminSendMinIntervalMs: number;
+  wechatAdminTlsRejectUnauthorized: boolean;
   groupOnly: boolean;
   quietWindowMs: number;
   mentionQuietWindowMs: number;
@@ -190,6 +205,7 @@ export function loadConfig(): AppConfig {
     runLockTtlSeconds: parseInteger(env.RUN_LOCK_TTL_SECONDS, 120),
     databaseUrl: env.DATABASE_URL,
     messageSource: env.MESSAGE_SOURCE,
+    messageSender: env.MESSAGE_SENDER,
     weflowBaseUrl: env.WEFLOW_BASE_URL,
     weflowAccessToken: env.WEFLOW_ACCESS_TOKEN?.trim() || undefined,
     weflowSsePath: env.WEFLOW_SSE_PATH,
@@ -200,6 +216,20 @@ export function loadConfig(): AppConfig {
     wechatRobotWxid,
     wechatCallbackToken: env.WECHAT_CALLBACK_TOKEN?.trim() || undefined,
     wechatHttpHistoryLimit: parseInteger(env.WECHAT_HTTP_HISTORY_LIMIT, 300),
+    wechatAdminBaseUrl: env.WECHAT_ADMIN_BASE_URL?.trim() || undefined,
+    wechatAdminApiToken: env.WECHAT_ADMIN_API_TOKEN?.trim() || undefined,
+    wechatAdminRobotId: env.WECHAT_ADMIN_ROBOT_ID?.trim()
+      ? parseInteger(env.WECHAT_ADMIN_ROBOT_ID, 0)
+      : undefined,
+    wechatAdminSendTimeoutMs: parseInteger(env.WECHAT_ADMIN_SEND_TIMEOUT_MS, 10000),
+    wechatAdminSendMinIntervalMs: Math.max(
+      0,
+      parseInteger(env.WECHAT_ADMIN_SEND_MIN_INTERVAL_MS, 1000),
+    ),
+    wechatAdminTlsRejectUnauthorized: parseBoolean(
+      env.WECHAT_ADMIN_TLS_REJECT_UNAUTHORIZED,
+      true,
+    ),
     groupOnly: parseBoolean(env.GROUP_ONLY, true),
     quietWindowMs: parseInteger(env.QUIET_WINDOW_MS, 8000),
     mentionQuietWindowMs: parseInteger(env.MENTION_QUIET_WINDOW_MS, 2000),

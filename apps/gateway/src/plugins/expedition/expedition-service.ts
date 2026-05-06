@@ -5,6 +5,7 @@ import type { PointsService } from "../../db/services/index.js";
 import { getBusinessDateKey, isBeforeDailyCutoff } from "../../time.js";
 import type {
   PluginContext,
+  PluginHandleResult,
   PluginOperationRunStore,
   SendMessageInput,
 } from "../types.js";
@@ -149,34 +150,31 @@ interface SettlementResult {
 export class ExpeditionService {
   public constructor(private readonly options: ExpeditionServiceOptions) {}
 
-  public async handleMessage(context: PluginContext): Promise<{ replyText?: string }> {
+  public async handleMessage(context: PluginContext): Promise<PluginHandleResult> {
     const content = context.content.trim();
     if (content === "取消远征") {
-      return {
-        replyText: await this.cancelEntry(context),
-      };
+      return this.replyToSender(await this.cancelEntry(context));
     }
 
     if (content === "我的战报") {
-      return {
-        replyText: await this.getMyReport(context),
-      };
+      return this.replyToSender(await this.getMyReport(context));
     }
 
     if (content === "我的遗物") {
-      return {
-        replyText: await this.getMyRelics(context),
-      };
+      return this.replyToSender(await this.getMyRelics(context));
     }
 
     if (content === "远征排行") {
-      return {
-        replyText: await this.getRanking(context),
-      };
+      return this.replyToSender(await this.getRanking(context));
     }
 
+    return this.replyToSender(await this.registerEntry(context));
+  }
+
+  private replyToSender(replyText: string): PluginHandleResult {
     return {
-      replyText: await this.registerEntry(context),
+      replyText,
+      atSender: true,
     };
   }
 

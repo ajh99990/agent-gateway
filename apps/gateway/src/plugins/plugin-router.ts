@@ -11,6 +11,7 @@ import type {
   PluginCommonServices,
   PluginDescriptor,
   PluginServices,
+  SendMessageInput,
 } from "./types.js";
 
 interface PluginRouterOptions {
@@ -97,7 +98,7 @@ export class PluginRouter {
         },
         "消息命中插件，但补拉完整消息失败，插件处理已短路",
       );
-      await this.services.sendMessage({
+      await this.safeSendMessage({
         sessionId: event.sessionId,
         groupName: event.groupName,
         text: "暂时无法读取完整消息，插件处理失败。",
@@ -116,7 +117,7 @@ export class PluginRouter {
         },
         "消息命中插件，但无法定位完整消息，插件处理已短路",
       );
-      await this.services.sendMessage({
+      await this.safeSendMessage({
         sessionId: event.sessionId,
         groupName: event.groupName,
         text: plugin.system
@@ -137,11 +138,13 @@ export class PluginRouter {
       });
 
       if (result.replyText?.trim()) {
-        await this.services.sendMessage({
+        await this.safeSendMessage({
           sessionId: event.sessionId,
           groupName: event.groupName,
           text: result.replyText,
           replyToMessage: message,
+          atSender: result.atSender,
+          atWxids: result.atWxids,
         });
       }
 
@@ -166,13 +169,29 @@ export class PluginRouter {
         },
         "插件处理消息失败，当前消息不会 fallback 到聊天 agent",
       );
-      await this.services.sendMessage({
+      await this.safeSendMessage({
         sessionId: event.sessionId,
         groupName: event.groupName,
         text: "插件处理失败，请稍后再试。",
         replyToMessage: message,
       });
       return true;
+    }
+  }
+
+  private async safeSendMessage(input: SendMessageInput): Promise<void> {
+    try {
+      await this.services.sendMessage(input);
+    } catch (error) {
+      this.services.logger.error(
+        {
+          err: error,
+          sessionId: input.sessionId,
+          groupName: input.groupName,
+          replyToFingerprint: input.replyToMessage?.fingerprint,
+        },
+        "插件回复发送失败",
+      );
     }
   }
 

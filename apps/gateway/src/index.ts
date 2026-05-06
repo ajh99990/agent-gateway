@@ -14,7 +14,7 @@ import { RedisStore } from "./infra/redis-store.js";
 import { AgentRuntimeClient } from "./integrations/agent-runtime-client.js";
 import { GraphitiClient } from "./integrations/graphiti-client.js";
 import { EventGateway } from "./messaging/event-gateway.js";
-import { MessageSender } from "./messaging/senders/message-sender.js";
+import { createMessageSender } from "./messaging/senders/message-sender.js";
 import { WechatHttpMessageSource } from "./messaging/sources/wechat-http-message-source.js";
 import { WeFlowClient } from "./messaging/sources/weflow-client.js";
 import { WeFlowMessageSource } from "./messaging/sources/weflow-message-source.js";
@@ -62,7 +62,7 @@ async function main(): Promise<void> {
   const operationRunStore = new PostgresPluginOperationRunStore(postgresStore.db);
   const pointsStore = new PointsStore(postgresStore.db);
   const pointsService = new DefaultPointsService(pointsStore);
-  const messageSender = new MessageSender(logger);
+  const messageSender = createMessageSender(config, logger);
   const scheduler = new BullMqScheduler(config, logger);
   const pluginServices: PluginCommonServices = {
     sendMessage: (input) => messageSender.sendMessage(input),
@@ -147,6 +147,7 @@ async function main(): Promise<void> {
     {
       weflowBaseUrl: config.weflowBaseUrl,
       messageSource: config.messageSource,
+      messageSender: config.messageSender,
       agentRuntimeUrl: config.agentRuntimeUrl,
       graphitiEnabled: graphitiClient.isEnabled(),
       groupOnly: config.groupOnly,
