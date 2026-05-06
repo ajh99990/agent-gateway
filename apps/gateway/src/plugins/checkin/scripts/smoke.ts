@@ -44,9 +44,8 @@ const SMOKE_USERS = [
   {
     senderId: "smoke-checkin-user-c",
     senderName: "签到小周",
-    initialPoints: 0,
   },
-].map((user) => ({ initialPoints: INITIAL_POINTS_BALANCE, ...user }));
+];
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -91,7 +90,7 @@ async function main(): Promise<void> {
     const todayTimestampMs = Date.parse(`${dateKey}T01:00:00.000Z`);
     const tomorrowTimestampMs = todayTimestampMs + 24 * 60 * 60 * 1000;
     const tomorrowDateKey = getBusinessDateKey(tomorrowTimestampMs, CHECKIN_TIMEZONE);
-    await seedInitialPoints(points, dateKey);
+    await seedLowBalanceUser(points, dateKey, SMOKE_USERS[2]!);
 
     const firstReply = await runCheckin(plugin, services, {
       content: "签到",
@@ -153,25 +152,23 @@ async function cleanSmokeData(db: PostgresStore["db"]): Promise<void> {
   await db.delete(pointsAccounts).where(eq(pointsAccounts.sessionId, SMOKE_SESSION_ID));
 }
 
-async function seedInitialPoints(points: DefaultPointsService, dateKey: string): Promise<void> {
-  for (const user of SMOKE_USERS) {
-    if (user.initialPoints <= 0) {
-      continue;
-    }
-
-    await points.earn({
-      sessionId: SMOKE_SESSION_ID,
-      senderId: user.senderId,
-      amount: user.initialPoints,
-      source: CHECKIN_PLUGIN_ID,
-      description: "签到 smoke 初始积分",
-      operatorId: "smoke",
-      idempotencyKey: `${CHECKIN_PLUGIN_ID}:smoke:${dateKey}:${user.senderId}:seed`,
-      metadata: {
-        smoke: true,
-      },
-    });
-  }
+async function seedLowBalanceUser(
+  points: DefaultPointsService,
+  dateKey: string,
+  user: typeof SMOKE_USERS[number],
+): Promise<void> {
+  await points.spend({
+    sessionId: SMOKE_SESSION_ID,
+    senderId: user.senderId,
+    amount: INITIAL_POINTS_BALANCE,
+    source: CHECKIN_PLUGIN_ID,
+    description: "签到 smoke 低余额测试",
+    operatorId: "smoke",
+    idempotencyKey: `${CHECKIN_PLUGIN_ID}:smoke:${dateKey}:${user.senderId}:low-balance`,
+    metadata: {
+      smoke: true,
+    },
+  });
 }
 
 async function seedExistingCheckin(

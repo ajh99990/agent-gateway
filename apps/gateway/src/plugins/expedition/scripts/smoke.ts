@@ -41,10 +41,12 @@ const SMOKE_USERS = [
   {
     senderId: "smoke-user-a",
     senderName: "烟测阿光",
+    initialPoints: 500,
   },
   {
     senderId: "smoke-user-b",
     senderName: "烟测小林",
+    initialPoints: 500,
   },
   {
     senderId: "smoke-user-c",
@@ -54,9 +56,9 @@ const SMOKE_USERS = [
   {
     senderId: "smoke-user-d",
     senderName: "烟测小周",
-    initialPoints: 15,
+    initialPoints: 0,
   },
-].map((user) => ({ initialPoints: 500, ...user }));
+];
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -131,9 +133,9 @@ async function main(): Promise<void> {
       messageTimestampMs: boostTimestampMs,
     });
     await assertEntryState(postgres.db, dateKey, SMOKE_USERS[1]!.senderId, {
-      stake: 500,
+      stake: 520,
       boosted: true,
-      boostStake: 100,
+      boostStake: 104,
     });
     await runCommand(expedition, services, {
       content: "加码",
@@ -166,7 +168,7 @@ async function main(): Promise<void> {
       messageTimestampMs: boostTimestampMs,
     });
     await runCommand(expedition, services, {
-      content: "远征 冒险 10",
+      content: "远征 冒险 12",
       userIndex: 3,
       messageTimestampMs,
     });
@@ -234,6 +236,10 @@ async function cleanSmokeData(db: PostgresStore["db"]): Promise<void> {
 
 async function seedPoints(points: DefaultPointsService, dateKey: string): Promise<void> {
   for (const user of SMOKE_USERS) {
+    if (user.initialPoints <= 0) {
+      continue;
+    }
+
     await points.earn({
       sessionId: SMOKE_SESSION_ID,
       senderId: user.senderId,
