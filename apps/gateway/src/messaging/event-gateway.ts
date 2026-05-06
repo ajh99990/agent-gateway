@@ -148,8 +148,8 @@ export class EventGateway {
    * 1. 过滤掉当前不关心的会话
    * 2. 用 Redis 按 source + messageKey 去重
    * 3. 先尝试走插件短路处理
-   * 4. 没有插件处理时，把事件塞进对应群的内存 accumulator
-   * 5. 为这个群安排或重置 quiet window
+   * 4. 如果配置为只运行插件，插件未处理时直接结束
+   * 5. 否则把事件塞进对应群的内存 accumulator，并安排 quiet window
    */
   private async handleIncomingEvent(event: InboundMessageEvent): Promise<void> {
     if (this.config.groupOnly && !isGroupSession(event.sessionId)) {
@@ -186,6 +186,19 @@ export class EventGateway {
 
     const handledByPlugin = await this.pluginRouter.tryHandle(event);
     if (handledByPlugin) {
+      return;
+    }
+
+    if (this.config.unhandledMessagePolicy === "drop") {
+      this.logger.debug(
+        {
+          sessionId: event.sessionId,
+          source: event.source,
+          messageKey: event.messageKey,
+          contentPreview: event.content,
+        },
+        "插件未处理该消息，已按配置跳过 agent fallback",
+      );
       return;
     }
 

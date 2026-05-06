@@ -4,6 +4,7 @@ import type { BotProfile } from "./types.js";
 
 export type MessageSourceKind = "weflow" | "wechat-http";
 export type MessageSenderKind = "log" | "wechat-admin";
+export type UnhandledMessagePolicy = "agent" | "drop";
 
 /**
  * 环境变量里很多值是字符串，比如 "true"、"120"、"a,b,c"。
@@ -70,6 +71,7 @@ const envSchema = z.object({
   DATABASE_URL: z.string().url(),
   MESSAGE_SOURCE: z.enum(["weflow", "wechat-http"]).default("weflow"),
   MESSAGE_SENDER: z.enum(["log", "wechat-admin"]).default("log"),
+  UNHANDLED_MESSAGE_POLICY: z.enum(["agent", "drop"]).default("agent"),
   WEFLOW_BASE_URL: z.string().url().default("http://127.0.0.1:5031"),
   WEFLOW_ACCESS_TOKEN: z.string().optional(),
   WEFLOW_SSE_PATH: z.string().default("/api/v1/push/messages"),
@@ -131,6 +133,7 @@ export interface AppConfig {
   databaseUrl: string;
   messageSource: MessageSourceKind;
   messageSender: MessageSenderKind;
+  unhandledMessagePolicy: UnhandledMessagePolicy;
   weflowBaseUrl: string;
   weflowAccessToken?: string;
   weflowSsePath: string;
@@ -208,6 +211,7 @@ export function loadConfig(): AppConfig {
     databaseUrl: env.DATABASE_URL,
     messageSource: env.MESSAGE_SOURCE,
     messageSender: env.MESSAGE_SENDER,
+    unhandledMessagePolicy: env.UNHANDLED_MESSAGE_POLICY,
     weflowBaseUrl: env.WEFLOW_BASE_URL,
     weflowAccessToken: env.WEFLOW_ACCESS_TOKEN?.trim() || undefined,
     weflowSsePath: env.WEFLOW_SSE_PATH,
