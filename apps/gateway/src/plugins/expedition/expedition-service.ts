@@ -2,16 +2,18 @@ import { randomInt } from "node:crypto";
 import type { Logger } from "pino";
 import type { GatewayDatabase } from "../../db/client.js";
 import type { PointsService } from "../../db/services/index.js";
-import { getBusinessDateKey, isBeforeDailyCutoff } from "../../time.js";
+import { getBusinessDateKey, getDailyCutoffAt, isBeforeDailyCutoff } from "../../time.js";
 import type {
   PluginContext,
   PluginHandleResult,
   PluginOperationRunStore,
+  PluginStateStore,
   SendMessageInput,
 } from "../types.js";
 import {
   ANNOUNCEMENT_TITLES,
   BOSS_NAMES,
+  BOOST_REMINDER_TEXTS,
   CRAZY_DEATH_REASONS,
   DEATH_REASONS,
   EFFECT_LABELS,
@@ -45,6 +47,9 @@ import {
 const MIN_STAKE = 10;
 const MAX_STAKE_RATE = 0.8;
 const INITIAL_BOSS_POLLUTION = 1_000_000;
+const BOOST_WINDOW_START = "17:40";
+const BOOST_MULTIPLIER_BONUS_BP = 5000;
+const BOOST_SURVIVAL_PENALTY_BP = 1000;
 
 const STRATEGY_CONFIG: Record<ExpeditionStrategy, {
   advanceMin: number;
@@ -127,6 +132,7 @@ interface ExpeditionServiceOptions {
   db: GatewayDatabase;
   store: ExpeditionStore;
   points: PointsService;
+  pluginState: PluginStateStore;
   operationRuns: PluginOperationRunStore;
   sendMessage(input: SendMessageInput): Promise<void>;
   logger: Logger;
@@ -154,6 +160,10 @@ export class ExpeditionService {
     const content = context.content.trim();
     if (content === "取消远征") {
       return this.replyToSender(await this.cancelEntry(context));
+    }
+
+    if (content === "加码") {
+      return this.replyToSender(await this.boostEntry(context));
     }
 
     if (content === "我的战报") {
@@ -186,14 +196,19 @@ export class ExpeditionService {
 
     const dateKey = getBusinessDateKey(now, EXPEDITION_TIMEZONE);
     const entries = await this.options.store.listRegisteredEntries(sessionId, dateKey);
+    const cancellableEntries = entries.filter((entry) => !entry.boosted);
+    const lockedEntries = entries.filter((entry) => entry.boosted);
     if (entries.length === 0) {
       return "远征插件已关闭。";
+    }
+    if (cancellableEntries.length === 0) {
+      return "远征插件已关闭。今日已加码的远征已经锁定，不会自动取消。";
     }
 
     await this.options.db.transaction(async (tx) => {
       const store = this.options.store.withTransaction(tx);
       const points = this.options.points.withTransaction(tx);
-      for (const entry of entries) {
+      for (const entry of cancellableEntries) {
         await points.earn({
           sessionId,
           senderId: entry.senderId,
@@ -212,7 +227,10 @@ export class ExpeditionService {
       }
     });
 
-    return `远征插件已关闭，已自动取消 ${entries.length} 个今日报名并返还投入积分。`;
+    const lockedText = lockedEntries.length > 0
+      ? `\n另有 ${lockedEntries.length} 个已加码远征已经锁定，未自动取消。`
+      : "";
+    return `远征插件已关闭，已自动取消 ${cancellableEntries.length} 个今日报名并返还投入积分。${lockedText}`;
   }
 
   public async runDailySettlement(timestamp: string): Promise<void> {
@@ -220,6 +238,43 @@ export class ExpeditionService {
     const sessions = await this.options.store.listRegisteredSessions(dateKey);
     for (const session of sessions) {
       await this.runSessionSettlement(session.sessionId, session.groupName, dateKey);
+    }
+  }
+
+  public async runBoostReminder(timestamp: string): Promise<void> {
+    const dateKey = getBusinessDateKey(timestamp, EXPEDITION_TIMEZONE);
+    const sessions = await this.options.pluginState.listEnabledSessions(EXPEDITION_PLUGIN_ID, true);
+    const errors: unknown[] = [];
+
+    for (const session of sessions) {
+      const operation = await this.options.operationRuns.tryStart({
+        pluginId: EXPEDITION_PLUGIN_ID,
+        scope: "session",
+        scopeId: session.sessionId,
+        operationKey: boostReminderOperationKey(dateKey),
+        metadata: { dateKey },
+        retryFailed: true,
+      });
+
+      if (!operation.started) {
+        continue;
+      }
+
+      try {
+        await this.options.sendMessage({
+          sessionId: session.sessionId,
+          groupName: session.groupName,
+          text: sample(BOOST_REMINDER_TEXTS),
+        });
+        await this.options.operationRuns.markSucceeded(operation.run.id, { dateKey });
+      } catch (error) {
+        await this.options.operationRuns.markFailed(operation.run.id, error, { dateKey });
+        errors.push(error);
+      }
+    }
+
+    if (errors.length > 0) {
+      throw new Error(`加码开放提醒发送失败：${errors.length} 个群发送失败`);
     }
   }
 
@@ -243,6 +298,12 @@ export class ExpeditionService {
         return {
           ok: false as const,
           message: closedText(),
+        };
+      }
+      if (existing?.status === "registered" && existing.boosted) {
+        return {
+          ok: false as const,
+          message: lockedModifyText(),
         };
       }
 
@@ -334,7 +395,74 @@ export class ExpeditionService {
 
     return result.modified
       ? modifiedText(result.entry, result.balanceAfter)
-      : registeredText(result.entry, result.balanceAfter);
+      : registeredText(result.entry, result.balanceAfter, context.content.trim() === "远征");
+  }
+
+  private async boostEntry(context: PluginContext): Promise<string> {
+    const messageDate = new Date(context.message.createdAtUnixMs);
+    if (!isWithinBoostWindow(messageDate)) {
+      return nonBoostTimeText();
+    }
+
+    const dateKey = getBusinessDateKey(messageDate, EXPEDITION_TIMEZONE);
+    const result = await this.options.db.transaction(async (tx) => {
+      const store = this.options.store.withTransaction(tx);
+      const points = this.options.points.withTransaction(tx);
+      const entry = await store.findEntry(context.sessionId, dateKey, context.message.senderId);
+      if (!entry || entry.status !== "registered") {
+        return {
+          ok: false as const,
+          message: notRegisteredBoostText(),
+        };
+      }
+      if (entry.boosted) {
+        return {
+          ok: false as const,
+          message: alreadyBoostedText(),
+        };
+      }
+
+      const balance = await points.getBalance(context.sessionId, context.message.senderId);
+      if (balance.balance < MIN_STAKE) {
+        return {
+          ok: false as const,
+          message: boostInsufficientText(),
+        };
+      }
+
+      const expectedBoostStake = Math.max(MIN_STAKE, Math.floor(entry.stake * 0.5));
+      const boostStake = Math.min(expectedBoostStake, balance.balance);
+      const ledger = await points.spend({
+        sessionId: context.sessionId,
+        senderId: context.message.senderId,
+        amount: boostStake,
+        source: EXPEDITION_PLUGIN_ID,
+        description: "远征临门一爪加码",
+        operatorId: context.message.senderId,
+        idempotencyKey: ledgerKey(entry, "boost"),
+        metadata: {
+          pluginId: EXPEDITION_PLUGIN_ID,
+          action: "boost",
+          dateKey,
+          boostStake,
+          stakeBeforeBoost: entry.stake,
+        },
+      });
+      const boostedEntry = await store.boostEntry(entry, boostStake);
+
+      return {
+        ok: true as const,
+        entry: boostedEntry,
+        boostStake,
+        balanceAfter: ledger.balanceAfter,
+      };
+    });
+
+    if (!result.ok) {
+      return result.message;
+    }
+
+    return boostedText(result.boostStake, result.entry.stake, result.balanceAfter);
   }
 
   private async cancelEntry(context: PluginContext): Promise<string> {
@@ -351,6 +479,12 @@ export class ExpeditionService {
       if (!entry || entry.status !== "registered") {
         return {
           cancelled: false as const,
+        };
+      }
+      if (entry.boosted) {
+        return {
+          cancelled: false as const,
+          locked: true,
         };
       }
 
@@ -375,6 +509,10 @@ export class ExpeditionService {
         balance: balance.balance,
       };
     });
+
+    if ("locked" in result && result.locked) {
+      return lockedCancelText();
+    }
 
     if (!result.cancelled) {
       return "你今天还没有报名远征。\n\n咪露看着空空的登记簿，尾巴晃了一下：\n“你还没出发就想取消，预判得很熟练喵。”";
@@ -582,14 +720,21 @@ export class ExpeditionService {
     const bonuses = collectBonuses(relics);
     const advance = randomIntInclusive(config.advanceMin, config.advanceMax);
     const targetDepth = player.currentDepth + advance + bonuses.diveBonus;
+    const boostSurvivalPenaltyBp = entry.boosted ? BOOST_SURVIVAL_PENALTY_BP : 0;
+    const boostMultiplierBonusBp = entry.boosted ? BOOST_MULTIPLIER_BONUS_BP : 0;
     const survivalRateBp = clamp(
-      config.survivalBp - targetDepth * 10 + bonuses.survivalBonusBp - bonuses.curseSurvivalPenaltyBp,
+      config.survivalBp
+        - targetDepth * 10
+        + bonuses.survivalBonusBp
+        - bonuses.curseSurvivalPenaltyBp
+        - boostSurvivalPenaltyBp,
       500,
       9500,
     );
     const survived = rollBasisPoints(survivalRateBp);
     const multiplierBp = randomIntInclusive(config.multiplierMinBp, config.multiplierMaxBp)
-      + bonuses.multiplierBonusBp;
+      + bonuses.multiplierBonusBp
+      + boostMultiplierBonusBp;
     const rewardPoints = survived ? Math.floor(entry.stake * multiplierBp / 10000) : 0;
     const basePurification = Math.floor(targetDepth * config.purificationMultiplierBp / 10000);
     const finalPurification = Math.floor(basePurification * (10000 + bonuses.purificationBonusBp) / 10000);
@@ -661,6 +806,8 @@ export class ExpeditionService {
       finalDepth,
       survivalRateBasisPoints: survivalRateBp,
       multiplierBasisPoints: multiplierBp,
+      boosted: entry.boosted,
+      boostStake: entry.boostStake,
       rewardPoints,
       lostPoints: survived ? 0 : entry.stake,
       purification,
@@ -671,6 +818,8 @@ export class ExpeditionService {
       details: {
         advance,
         relicCountBeforeSettlement: relics.length,
+        boostSurvivalPenaltyBp,
+        boostMultiplierBonusBp,
       },
       createdAt: new Date(),
     };
@@ -907,9 +1056,15 @@ function buildAnnouncement(input: {
 }): string {
   const survived = input.reports.filter((report) => report.outcome === "survived");
   const dead = input.reports.filter((report) => report.outcome === "dead");
-  const richest = maxBy(survived, (report) => report.rewardPoints - report.stake);
-  const poorest = maxBy(dead, (report) => report.lostPoints);
+  const boostedReports = input.reports.filter((report) => report.boosted);
+  const richest = maxBy(survived, (report) => (
+    report.rewardPoints - report.stake + (report.boosted ? 1_000_000 : 0)
+  ));
+  const poorest = maxBy(dead, (report) => report.lostPoints + (report.boosted ? 1_000_000 : 0));
   const deepest = maxBy(input.reports, (report) => report.targetDepth);
+  const boostMoment = maxBy(boostedReports, (report) => (
+    report.outcome === "survived" ? report.rewardPoints - report.stake : report.lostPoints
+  ));
   const bestRelic = maxBy(input.relics, (relic) => rarityRank(relic.rarity));
   const specialEvents = input.reports.map((report) => report.specialEventText).filter(Boolean);
   const lines = [
@@ -930,6 +1085,16 @@ function buildAnnouncement(input: {
 
   if (deepest) {
     lines.push("", `最高深入：${deepest.senderName} 第 ${deepest.targetDepth} 层。`);
+  }
+
+  if (boostMoment) {
+    const resultText = boostMoment.outcome === "survived"
+      ? `生还带回 ${boostMoment.rewardPoints} 积分`
+      : `阵亡损失 ${boostMoment.lostPoints} 积分`;
+    lines.push(
+      "",
+      `临门一爪：${boostMoment.senderName} 追加 ${boostMoment.boostStake} 积分后${resultText}。`,
+    );
   }
 
   if (bestRelic) {
@@ -965,6 +1130,7 @@ function reportText(report: ExpeditionReportRecord): string {
     return [
       `今日远征：${STRATEGY_LABELS[report.strategy]}`,
       `投入积分：${report.stake}`,
+      report.boosted ? `临门一爪：已加码 ${report.boostStake}` : undefined,
       "结果：生还",
       `推进层数：${report.startDepth} -> ${report.finalDepth}`,
       `生还率：${formatPercentBp(report.survivalRateBasisPoints)}`,
@@ -979,6 +1145,7 @@ function reportText(report: ExpeditionReportRecord): string {
   return [
     `今日远征：${STRATEGY_LABELS[report.strategy]}`,
     `投入积分：${report.stake}`,
+    report.boosted ? `临门一爪：已加码 ${report.boostStake}` : undefined,
     "结果：阵亡",
     `阵亡层数：${report.targetDepth}`,
     `生还率：${formatPercentBp(report.survivalRateBasisPoints)}`,
@@ -990,7 +1157,11 @@ function reportText(report: ExpeditionReportRecord): string {
   ].filter(Boolean).join("\n");
 }
 
-function registeredText(entry: ExpeditionEntryRecord, balanceAfter: number): string {
+function registeredText(entry: ExpeditionEntryRecord, balanceAfter: number, defaultCommand: boolean): string {
+  if (defaultCommand) {
+    return `报名成功。\n\n今日远征：${STRATEGY_LABELS[entry.strategy]}\n投入积分：${entry.stake}\n剩余积分：${balanceAfter}\n结算时间：${EXPEDITION_SETTLEMENT_CUTOFF}\n\n咪露把默认申请表盖上章：\n“先给你安排冒险档喵。下次想更刺激，可以试试「远征 疯狂 100」或者「远征 疯狂 梭哈」。”`;
+  }
+
   return `报名成功。\n\n今日远征：${STRATEGY_LABELS[entry.strategy]}\n投入积分：${entry.stake}\n剩余积分：${balanceAfter}\n结算时间：${EXPEDITION_SETTLEMENT_CUTOFF}\n\n前台猫娘咪露把你的名字贴上任务板，尾巴轻轻一晃：\n“好耶，又有勇者主动交押金了喵。”`;
 }
 
@@ -1000,6 +1171,34 @@ function modifiedText(entry: ExpeditionEntryRecord, balanceAfter: number): strin
 
 function unchangedText(entry: ExpeditionEntryRecord, balanceAfter: number): string {
   return `你的远征计划没有变化。\n\n今日远征：${STRATEGY_LABELS[entry.strategy]}\n投入积分：${entry.stake}\n剩余积分：${balanceAfter}\n结算时间：${EXPEDITION_SETTLEMENT_CUTOFF}\n\n咪露用爪子点了点任务板：\n“同一张申请表不用交两遍喵，我还没这么健忘。”`;
+}
+
+function boostedText(boostStake: number, totalStake: number, balanceAfter: number): string {
+  return `加码成功。\n\n追加投入：${boostStake}\n当前总投入：${totalStake}\n剩余积分：${balanceAfter}\n最终倍率 +0.5\n生还率 -10%\n\n咪露把爪印盖在申请表上：\n“好耶，理智又少了一点喵。”`;
+}
+
+function boostInsufficientText(): string {
+  return "加码失败，剩余积分不足。\n\n至少需要 10 积分才能加码。\n咪露看了看你的钱包：\n“想法很大，余额很小喵。”";
+}
+
+function alreadyBoostedText(): string {
+  return "今天已经加码过了。\n\n咪露把爪子收回去：\n“一天只能上头一次喵，公会也怕你太努力。”";
+}
+
+function notRegisteredBoostText(): string {
+  return "你还没有报名远征，不能加码。\n\n咪露晃了晃空白申请表：\n“连车都没上，就想把油门踩到底喵？”";
+}
+
+function nonBoostTimeText(): string {
+  return `现在还不能加码。\n\n临门一爪开放时间：${BOOST_WINDOW_START} - 17:49\n咪露舔了舔爪子：\n“别急喵，真正上头的时间还没到。”`;
+}
+
+function lockedModifyText(): string {
+  return "今日远征已经锁定，无法修改。\n\n咪露把加码申请表压在爪子下面：\n“爪印都盖上去了喵，现在反悔会显得你很清醒。”";
+}
+
+function lockedCancelText(): string {
+  return "今日远征已经锁定，无法取消。\n\n咪露把登记簿抱紧：\n“都临门一爪了喵，现在逃跑就没有节目效果了。”";
 }
 
 function settlementRunningText(): string {
@@ -1020,6 +1219,18 @@ function ledgerKey(entry: ExpeditionEntryRecord, action: string): string {
 
 function settlementOperationKey(dateKey: string): string {
   return `settlement:${dateKey}`;
+}
+
+function boostReminderOperationKey(dateKey: string): string {
+  return `boost-reminder:${dateKey}`;
+}
+
+function isWithinBoostWindow(input: Date): boolean {
+  const dateKey = getBusinessDateKey(input, EXPEDITION_TIMEZONE);
+  const boostStartAt = getDailyCutoffAt(dateKey, BOOST_WINDOW_START, EXPEDITION_TIMEZONE);
+  const settlementAt = getDailyCutoffAt(dateKey, EXPEDITION_SETTLEMENT_CUTOFF, EXPEDITION_TIMEZONE);
+  const time = input.getTime();
+  return time >= boostStartAt.getTime() && time < settlementAt.getTime();
 }
 
 function rollBasisPoints(threshold: number): boolean {

@@ -8,6 +8,7 @@ import {
 
 const EXPEDITION_KEYWORDS = [
   "远征",
+  "加码",
   "取消远征",
   "我的战报",
   "我的遗物",
@@ -20,6 +21,7 @@ export function createExpeditionPlugin(context: PluginBootstrapContext): Gateway
     db: context.db,
     store,
     points: context.services.points,
+    pluginState: context.services.pluginState,
     operationRuns: context.services.operationRuns,
     sendMessage: context.services.sendMessage,
     logger: context.services.logger.child({ pluginId: EXPEDITION_PLUGIN_ID }),
@@ -32,7 +34,7 @@ export function createExpeditionPlugin(context: PluginBootstrapContext): Gateway
       {
         keywords: EXPEDITION_KEYWORDS,
         matches(content) {
-          return content === "远征" || content.startsWith("远征 ");
+          return content === "远征" || content === "加码" || content.startsWith("远征 ");
         },
         async handle(pluginContext) {
           return service.handleMessage(pluginContext);
@@ -40,6 +42,25 @@ export function createExpeditionPlugin(context: PluginBootstrapContext): Gateway
       },
     ],
     scheduledJobs: [
+      {
+        id: "expedition.boost-reminder",
+        name: "远征加码开放提醒",
+        description: "每天 17:40 向开启远征插件的群发布加码开放提醒",
+        schedule: {
+          cron: "40 17 * * *",
+          timezone: EXPEDITION_TIMEZONE,
+        },
+        options: {
+          attempts: 3,
+          backoff: {
+            type: "exponential",
+            delay: 60_000,
+          },
+        },
+        async process(jobContext) {
+          await service.runBoostReminder(jobContext.execution.timestamp);
+        },
+      },
       {
         id: "expedition.daily-settlement",
         name: "每日远征结算",

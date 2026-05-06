@@ -75,6 +75,9 @@ export class ExpeditionStore {
         strategy: input.plan.strategy,
         stake: input.plan.stake,
         allIn: input.plan.allIn,
+        boosted: false,
+        boostStake: 0,
+        boostedAt: null,
         status: "registered",
         revision: 1,
         createdAt: now,
@@ -102,10 +105,34 @@ export class ExpeditionStore {
         strategy: input.plan.strategy,
         stake: input.plan.stake,
         allIn: input.plan.allIn,
+        boosted: false,
+        boostStake: 0,
+        boostedAt: null,
         status: "registered",
         revision: entry.revision + 1,
         updatedAt: now,
         settledAt: null,
+      })
+      .where(eq(expeditionEntries.id, entry.id))
+      .returning();
+
+    return requireEntry(rows[0]);
+  }
+
+  public async boostEntry(
+    entry: ExpeditionEntryRecord,
+    boostStake: number,
+  ): Promise<ExpeditionEntryRecord> {
+    const now = new Date();
+    const rows = await this.executor()
+      .update(expeditionEntries)
+      .set({
+        stake: entry.stake + boostStake,
+        boosted: true,
+        boostStake,
+        boostedAt: now,
+        revision: entry.revision + 1,
+        updatedAt: now,
       })
       .where(eq(expeditionEntries.id, entry.id))
       .returning();
@@ -417,6 +444,8 @@ export class ExpeditionStore {
         finalDepth: input.finalDepth,
         survivalRateBasisPoints: input.survivalRateBasisPoints,
         multiplierBasisPoints: input.multiplierBasisPoints,
+        boosted: input.boosted,
+        boostStake: input.boostStake,
         rewardPoints: input.rewardPoints,
         lostPoints: input.lostPoints,
         purification: input.purification,
@@ -538,6 +567,9 @@ function toEntryRecord(row: typeof expeditionEntries.$inferSelect): ExpeditionEn
     strategy: row.strategy as ExpeditionStrategy,
     stake: row.stake,
     allIn: row.allIn,
+    boosted: row.boosted,
+    boostStake: row.boostStake,
+    boostedAt: row.boostedAt ?? undefined,
     status: row.status as ExpeditionEntryStatus,
     revision: row.revision,
     createdAt: row.createdAt,
@@ -605,6 +637,8 @@ function toReportRecord(row: typeof expeditionReports.$inferSelect): ExpeditionR
     finalDepth: row.finalDepth,
     survivalRateBasisPoints: row.survivalRateBasisPoints,
     multiplierBasisPoints: row.multiplierBasisPoints,
+    boosted: row.boosted,
+    boostStake: row.boostStake,
     rewardPoints: row.rewardPoints,
     lostPoints: row.lostPoints,
     purification: row.purification,

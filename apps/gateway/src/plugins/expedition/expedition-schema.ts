@@ -25,6 +25,9 @@ export const expeditionEntries = pgTable(
     strategy: text("strategy").notNull(),
     stake: integer("stake").notNull(),
     allIn: boolean("all_in").default(false).notNull(),
+    boosted: boolean("boosted").default(false).notNull(),
+    boostStake: integer("boost_stake").default(0).notNull(),
+    boostedAt: timestamp("boosted_at", { withTimezone: true }),
     status: text("status").notNull(),
     revision: integer("revision").default(1).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
@@ -38,6 +41,7 @@ export const expeditionEntries = pgTable(
       table.senderId,
     ),
     check("expedition_entries_stake_positive", sql`${table.stake} > 0`),
+    check("expedition_entries_boost_stake_non_negative", sql`${table.boostStake} >= 0`),
     check("expedition_entries_revision_positive", sql`${table.revision} > 0`),
     check(
       "expedition_entries_strategy_check",
@@ -136,6 +140,8 @@ export const expeditionReports = pgTable(
     finalDepth: integer("final_depth").notNull(),
     survivalRateBasisPoints: integer("survival_rate_basis_points").notNull(),
     multiplierBasisPoints: integer("multiplier_basis_points").notNull(),
+    boosted: boolean("boosted").default(false).notNull(),
+    boostStake: integer("boost_stake").default(0).notNull(),
     rewardPoints: integer("reward_points").default(0).notNull(),
     lostPoints: integer("lost_points").default(0).notNull(),
     purification: integer("purification").default(0).notNull(),
@@ -161,5 +167,6 @@ export const expeditionReports = pgTable(
       "expedition_reports_strategy_check",
       sql`${table.strategy} in ('steady', 'adventure', 'crazy')`,
     ),
+    check("expedition_reports_boost_stake_non_negative", sql`${table.boostStake} >= 0`),
   ],
 );

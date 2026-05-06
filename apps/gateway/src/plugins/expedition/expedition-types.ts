@@ -26,6 +26,9 @@ export interface ExpeditionEntryRecord {
   strategy: ExpeditionStrategy;
   stake: number;
   allIn: boolean;
+  boosted: boolean;
+  boostStake: number;
+  boostedAt?: Date;
   status: ExpeditionEntryStatus;
   revision: number;
   createdAt: Date;
@@ -95,6 +98,8 @@ export interface ExpeditionReportRecord {
   finalDepth: number;
   survivalRateBasisPoints: number;
   multiplierBasisPoints: number;
+  boosted: boolean;
+  boostStake: number;
   rewardPoints: number;
   lostPoints: number;
   purification: number;
