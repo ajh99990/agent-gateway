@@ -80,6 +80,7 @@ const envSchema = z.object({
   WECHAT_ROBOT_WXID: z.string().optional(),
   WECHAT_CALLBACK_TOKEN: z.string().optional(),
   WECHAT_HTTP_HISTORY_LIMIT: z.string().default("300"),
+  WECHAT_HTTP_REALTIME_LOOKBACK_MS: z.string().default("30000"),
   WECHAT_ADMIN_BASE_URL: z.preprocess(emptyStringToUndefined, z.string().url().optional()),
   WECHAT_ADMIN_API_TOKEN: z.string().optional(),
   WECHAT_ADMIN_ROBOT_ID: z.string().optional(),
@@ -140,6 +141,7 @@ export interface AppConfig {
   wechatRobotWxid?: string;
   wechatCallbackToken?: string;
   wechatHttpHistoryLimit: number;
+  wechatHttpRealtimeLookbackMs: number;
   wechatAdminBaseUrl?: string;
   wechatAdminApiToken?: string;
   wechatAdminRobotId?: number;
@@ -216,6 +218,10 @@ export function loadConfig(): AppConfig {
     wechatRobotWxid,
     wechatCallbackToken: env.WECHAT_CALLBACK_TOKEN?.trim() || undefined,
     wechatHttpHistoryLimit: parseInteger(env.WECHAT_HTTP_HISTORY_LIMIT, 300),
+    wechatHttpRealtimeLookbackMs: Math.max(
+      0,
+      parseInteger(env.WECHAT_HTTP_REALTIME_LOOKBACK_MS, 30000),
+    ),
     wechatAdminBaseUrl: env.WECHAT_ADMIN_BASE_URL?.trim() || undefined,
     wechatAdminApiToken: env.WECHAT_ADMIN_API_TOKEN?.trim() || undefined,
     wechatAdminRobotId: env.WECHAT_ADMIN_ROBOT_ID?.trim()

@@ -30,6 +30,7 @@ export class WechatHttpMessageSource implements MessageSource, MessageHistoryPro
     connected: false,
     reconnectCount: 0,
   };
+  private dispatchAfterUnixMs = Date.now();
 
   public constructor(
     private readonly config: AppConfig,
@@ -60,9 +61,20 @@ export class WechatHttpMessageSource implements MessageSource, MessageHistoryPro
     onEvent: (event: InboundMessageEvent) => Promise<void>,
     signal: AbortSignal,
   ): Promise<void> {
+    const startedAt = Date.now();
+
     this.onEvent = onEvent;
     this.status.connected = true;
-    this.status.lastReadyAt = new Date().toISOString();
+    this.status.lastReadyAt = new Date(startedAt).toISOString();
+    this.dispatchAfterUnixMs = startedAt - this.config.wechatHttpRealtimeLookbackMs;
+
+    this.logger.info(
+      {
+        dispatchAfter: new Date(this.dispatchAfterUnixMs).toISOString(),
+        realtimeLookbackMs: this.config.wechatHttpRealtimeLookbackMs,
+      },
+      "微信 HTTP 消息源已启动，历史消息将只入库不触发处理",
+    );
 
     signal.addEventListener(
       "abort",
@@ -134,6 +146,8 @@ export class WechatHttpMessageSource implements MessageSource, MessageHistoryPro
 
       let insertedCount = 0;
       let duplicateCount = 0;
+      let historicalCount = 0;
+      let dispatchedCount = 0;
       for (const input of inputs) {
         const result = await this.inboundMessages.insertIfNew(input);
         if (!result.inserted) {
@@ -143,6 +157,12 @@ export class WechatHttpMessageSource implements MessageSource, MessageHistoryPro
 
         insertedCount += 1;
         const message = inboundRecordToNormalizedMessage(result.record);
+        if (message.createdAtUnixMs < this.dispatchAfterUnixMs) {
+          historicalCount += 1;
+          continue;
+        }
+
+        dispatchedCount += 1;
         await this.onEvent({
           source: this.id,
           event: "message.new",
@@ -157,12 +177,26 @@ export class WechatHttpMessageSource implements MessageSource, MessageHistoryPro
         });
       }
 
+      if (historicalCount > 0) {
+        this.logger.info(
+          {
+            received: inputs.length,
+            inserted: insertedCount,
+            historical: historicalCount,
+            dispatchAfter: new Date(this.dispatchAfterUnixMs).toISOString(),
+          },
+          "微信 HTTP 回调包含历史消息，已跳过业务派发",
+        );
+      }
+
       this.status.lastMessageAt = new Date().toISOString();
       sendJson(200, {
         success: true,
         received: inputs.length,
         inserted: insertedCount,
         duplicated: duplicateCount,
+        historical: historicalCount,
+        dispatched: dispatchedCount,
       });
     } catch (error) {
       if (error instanceof CallbackHttpError) {

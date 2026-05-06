@@ -45,6 +45,7 @@ POST /api/v1/wechat-client/:wechatID/logout
 - 解析 `MsgSource` 里的 `atuserlist`，用于判断是否 @ 机器人。
 - 写入 `inbound_messages` 表，并通过唯一键去重，避免回调重试导致重复处理。
 - 只有新入库的消息会继续触发插件链路。
+- 机器人服务端启动或重连时推送的历史消息仍会入库，但不会触发插件和 agent。
 
 ## agent-gateway 侧配置
 
@@ -57,12 +58,14 @@ GATEWAY_PORT=3400
 ENABLE_HEALTH_SERVER=true
 WECHAT_ROBOT_WXID=这里填写当前机器人wxid
 WECHAT_CALLBACK_TOKEN=
+WECHAT_HTTP_REALTIME_LOOKBACK_MS=30000
 ```
 
 说明：
 
 - `WECHAT_ROBOT_WXID` 建议填写。gateway 会用它校验 path 里的 `wechatID`，不匹配的回调会被忽略。
 - `WECHAT_CALLBACK_TOKEN` 先留空。当前机器人服务端直连回调通常只配置 `WECHAT_CLIENT_HOST`，未确认是否能给回调追加自定义 header 或 query token。
+- `WECHAT_HTTP_REALTIME_LOOKBACK_MS` 用来防启动风暴。默认只派发“gateway 启动前 30 秒以内或启动后的消息”；更旧的消息只入库，不会触发插件回复。
 - 如果后续机器人服务端支持自定义鉴权，gateway 已支持三种 token 传法：
   - `x-gateway-callback-token: <token>`
   - `Authorization: Bearer <token>`
@@ -135,7 +138,9 @@ curl -X POST "http://192.168.1.23:3400/api/v1/wechat-client/<机器人wxid>/sync
   "success": true,
   "received": 0,
   "inserted": 0,
-  "duplicated": 0
+  "duplicated": 0,
+  "historical": 0,
+  "dispatched": 0
 }
 ```
 
