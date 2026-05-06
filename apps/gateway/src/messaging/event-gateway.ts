@@ -148,9 +148,8 @@ export class EventGateway {
    * 1. 过滤掉当前不关心的会话
    * 2. 用 Redis 按 source + messageKey 去重
    * 3. 先尝试走插件短路处理
-   * 4. 如果开启了插件调试模式，未命中插件的消息到这里就结束
-   * 5. 没有插件处理时，把事件塞进对应群的内存 accumulator
-   * 6. 为这个群安排或重置 quiet window
+   * 4. 没有插件处理时，把事件塞进对应群的内存 accumulator
+   * 5. 为这个群安排或重置 quiet window
    */
   private async handleIncomingEvent(event: InboundMessageEvent): Promise<void> {
     if (this.config.groupOnly && !isGroupSession(event.sessionId)) {
@@ -187,20 +186,6 @@ export class EventGateway {
 
     const handledByPlugin = await this.pluginRouter.tryHandle(event);
     if (handledByPlugin) {
-      return;
-    }
-
-    if (this.config.pluginOnlyMode) {
-      await this.advanceCommittedLocalIdForSkippedEvent(event);
-      this.logger.debug(
-        {
-          sessionId: event.sessionId,
-          groupName: event.groupName,
-          source: event.source,
-          messageKey: event.messageKey,
-        },
-        "插件调试模式已开启，未命中插件的消息已跳过 quiet window 和聊天 agent",
-      );
       return;
     }
 
@@ -261,22 +246,6 @@ export class EventGateway {
 
     this.sessions.set(sessionId, created);
     return created;
-  }
-
-  private async advanceCommittedLocalIdForSkippedEvent(
-    event: InboundMessageEvent,
-  ): Promise<void> {
-    const localId = event.normalizedMessage?.localId ?? parseLocalIdFromMessageKey(event.messageKey);
-    if (localId === undefined) {
-      return;
-    }
-
-    const current = await this.redis.getCommittedLocalId(event.sessionId);
-    if (current !== null && current >= localId) {
-      return;
-    }
-
-    await this.redis.setCommittedLocalId(event.sessionId, localId);
   }
 
   /**
@@ -728,16 +697,6 @@ function truncateText(text: string, maxChars: number): string {
 
 function sortByLocalId(left: { localId: number }, right: { localId: number }): number {
   return left.localId - right.localId;
-}
-
-function parseLocalIdFromMessageKey(messageKey: string): number | undefined {
-  const parts = messageKey.split(":");
-  if (parts.length < 7 || parts[0] !== "server") {
-    return undefined;
-  }
-
-  const localId = Number.parseInt(parts[4] ?? "", 10);
-  return Number.isFinite(localId) ? localId : undefined;
 }
 
 /**

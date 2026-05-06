@@ -176,14 +176,6 @@ PluginRouter.tryHandle(event)
 
 插件开发细节看 `doc/gateway-plugin-development.md`。
 
-临时调试插件时，可以设置：
-
-```env
-PLUGIN_ONLY_MODE=true
-```
-
-开启后，未命中插件 command 的消息会在插件路由后直接结束，不进入 quiet window，也不会调用聊天 agent。gateway 会尽量推进当前会话的 `committedLocalId`，避免之后关闭该模式时回放已跳过的普通聊天。
-
 ## Quiet Window
 
 未被插件处理的消息，会按 `sessionId` 放进内存 accumulator。

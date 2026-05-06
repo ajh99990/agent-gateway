@@ -79,7 +79,6 @@ const envSchema = z.object({
   WECHAT_CALLBACK_TOKEN: z.string().optional(),
   WECHAT_HTTP_HISTORY_LIMIT: z.string().default("300"),
   GROUP_ONLY: z.string().optional(),
-  PLUGIN_ONLY_MODE: z.string().optional(),
   QUIET_WINDOW_MS: z.string().default("8000"),
   MENTION_QUIET_WINDOW_MS: z.string().default("2000"),
   ERROR_RETRY_DELAY_MS: z.string().default("3000"),
@@ -133,7 +132,6 @@ export interface AppConfig {
   wechatCallbackToken?: string;
   wechatHttpHistoryLimit: number;
   groupOnly: boolean;
-  pluginOnlyMode: boolean;
   quietWindowMs: number;
   mentionQuietWindowMs: number;
   errorRetryDelayMs: number;
@@ -203,7 +201,6 @@ export function loadConfig(): AppConfig {
     wechatCallbackToken: env.WECHAT_CALLBACK_TOKEN?.trim() || undefined,
     wechatHttpHistoryLimit: parseInteger(env.WECHAT_HTTP_HISTORY_LIMIT, 300),
     groupOnly: parseBoolean(env.GROUP_ONLY, true),
-    pluginOnlyMode: parseBoolean(env.PLUGIN_ONLY_MODE, false),
     quietWindowMs: parseInteger(env.QUIET_WINDOW_MS, 8000),
     mentionQuietWindowMs: parseInteger(env.MENTION_QUIET_WINDOW_MS, 2000),
     errorRetryDelayMs: parseInteger(env.ERROR_RETRY_DELAY_MS, 3000),
