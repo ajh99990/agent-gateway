@@ -41,7 +41,12 @@ const SMOKE_USERS = [
     senderId: "smoke-checkin-user-b",
     senderName: "签到小林",
   },
-];
+  {
+    senderId: "smoke-checkin-user-c",
+    senderName: "签到小周",
+    initialPoints: 0,
+  },
+].map((user) => ({ initialPoints: INITIAL_POINTS_BALANCE, ...user }));
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -86,22 +91,37 @@ async function main(): Promise<void> {
     const todayTimestampMs = Date.parse(`${dateKey}T01:00:00.000Z`);
     const tomorrowTimestampMs = todayTimestampMs + 24 * 60 * 60 * 1000;
     const tomorrowDateKey = getBusinessDateKey(tomorrowTimestampMs, CHECKIN_TIMEZONE);
+    await seedInitialPoints(points, dateKey);
 
-    await runCheckin(plugin, services, {
+    const firstReply = await runCheckin(plugin, services, {
       content: "签到",
       userIndex: 0,
       timestampMs: todayTimestampMs,
     });
+    assertReplyIncludes(firstReply, "签到成功", "首次签到文案");
     await assertBalance(points, SMOKE_USERS[0]!.senderId, 30, "首次签到后余额");
     await assertDailyRecordCount(postgres.db, dateKey, SMOKE_USERS[0]!.senderId, 1);
 
-    await runCheckin(plugin, services, {
+    const duplicateReadyReply = await runCheckin(plugin, services, {
       content: "上班",
       userIndex: 0,
       timestampMs: todayTimestampMs,
     });
+    assertReplyIncludes(duplicateReadyReply, "当前积分：30", "余额充足重复签到文案");
+    assertReplyExcludes(duplicateReadyReply, "获得 10 积分", "重复签到不应展示本次获得积分");
     await assertBalance(points, SMOKE_USERS[0]!.senderId, 30, "重复签到后余额");
     await assertDailyRecordCount(postgres.db, dateKey, SMOKE_USERS[0]!.senderId, 1);
+
+    await seedExistingCheckin(postgres.db, dateKey, SMOKE_USERS[2]!);
+    const duplicateLowBalanceReply = await runCheckin(plugin, services, {
+      content: "签到",
+      userIndex: 2,
+      timestampMs: todayTimestampMs,
+    });
+    assertReplyIncludes(duplicateLowBalanceReply, "当前积分：0", "余额不足重复签到文案");
+    assertReplyExcludes(duplicateLowBalanceReply, "获得 10 积分", "余额不足重复签到不应展示本次获得积分");
+    await assertBalance(points, SMOKE_USERS[2]!.senderId, 0, "余额不足重复签到后余额");
+    await assertDailyRecordCount(postgres.db, dateKey, SMOKE_USERS[2]!.senderId, 1);
 
     await runCheckin(plugin, services, {
       content: "上班",
@@ -133,6 +153,50 @@ async function cleanSmokeData(db: PostgresStore["db"]): Promise<void> {
   await db.delete(pointsAccounts).where(eq(pointsAccounts.sessionId, SMOKE_SESSION_ID));
 }
 
+async function seedInitialPoints(points: DefaultPointsService, dateKey: string): Promise<void> {
+  for (const user of SMOKE_USERS) {
+    if (user.initialPoints <= 0) {
+      continue;
+    }
+
+    await points.earn({
+      sessionId: SMOKE_SESSION_ID,
+      senderId: user.senderId,
+      amount: user.initialPoints,
+      source: CHECKIN_PLUGIN_ID,
+      description: "签到 smoke 初始积分",
+      operatorId: "smoke",
+      idempotencyKey: `${CHECKIN_PLUGIN_ID}:smoke:${dateKey}:${user.senderId}:seed`,
+      metadata: {
+        smoke: true,
+      },
+    });
+  }
+}
+
+async function seedExistingCheckin(
+  db: PostgresStore["db"],
+  dateKey: string,
+  user: typeof SMOKE_USERS[number],
+): Promise<void> {
+  await db
+    .insert(checkinRecords)
+    .values({
+      sessionId: SMOKE_SESSION_ID,
+      senderId: user.senderId,
+      senderName: user.senderName,
+      dateKey,
+      reward: CHECKIN_REWARD,
+    })
+    .onConflictDoNothing({
+      target: [
+        checkinRecords.sessionId,
+        checkinRecords.senderId,
+        checkinRecords.dateKey,
+      ],
+    });
+}
+
 async function runCheckin(
   plugin: GatewayPlugin,
   services: PluginServices,
@@ -141,7 +205,7 @@ async function runCheckin(
     userIndex: number;
     timestampMs: number;
   },
-): Promise<void> {
+): Promise<string> {
   const user = SMOKE_USERS[input.userIndex]!;
   const context = createContext(input.content, user, services, input.timestampMs);
   const command = findCommand(plugin, input.content);
@@ -158,6 +222,8 @@ async function runCheckin(
   if (expectedText && !result.replyText?.trim()) {
     throw new Error("签到插件没有返回回复文本");
   }
+
+  return result.replyText ?? "";
 }
 
 function findCommand(plugin: GatewayPlugin, content: string): PluginCommand | undefined {
@@ -166,6 +232,18 @@ function findCommand(plugin: GatewayPlugin, content: string): PluginCommand | un
       command.matches?.(content) ||
       command.keywords?.some((keyword) => keyword.trim() === content),
   );
+}
+
+function assertReplyIncludes(replyText: string, expected: string, label: string): void {
+  if (!replyText.includes(expected)) {
+    throw new Error(`${label}不符合预期：缺少 ${expected}`);
+  }
+}
+
+function assertReplyExcludes(replyText: string, unexpected: string, label: string): void {
+  if (replyText.includes(unexpected)) {
+    throw new Error(`${label}不符合预期：不应包含 ${unexpected}`);
+  }
 }
 
 function createContext(

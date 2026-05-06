@@ -49,8 +49,14 @@ const SMOKE_USERS = [
   {
     senderId: "smoke-user-c",
     senderName: "烟测老王",
+    initialPoints: 500,
   },
-];
+  {
+    senderId: "smoke-user-d",
+    senderName: "烟测小周",
+    initialPoints: 15,
+  },
+].map((user) => ({ initialPoints: 500, ...user }));
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -94,11 +100,15 @@ async function main(): Promise<void> {
     if (!findCommand(expedition, "远征 疯狂 梭哈")) {
       throw new Error("远征插件未匹配带参数远征指令");
     }
-    if (expedition.scheduledJobs?.length !== 1) {
-      throw new Error("远征插件应注册 1 个每日结算定时任务");
+    if (!findCommand(expedition, "加码")) {
+      throw new Error("远征插件未匹配加码指令");
+    }
+    if (expedition.scheduledJobs?.length !== 2) {
+      throw new Error("远征插件应注册 2 个每日定时任务");
     }
 
     await seedPoints(points, dateKey);
+    const boostTimestampMs = Date.parse(`${dateKey}T09:45:00.000Z`);
 
     await runCommand(expedition, services, {
       content: "远征 冒险 50",
@@ -116,6 +126,31 @@ async function main(): Promise<void> {
       messageTimestampMs,
     });
     await runCommand(expedition, services, {
+      content: "加码",
+      userIndex: 1,
+      messageTimestampMs: boostTimestampMs,
+    });
+    await assertEntryState(postgres.db, dateKey, SMOKE_USERS[1]!.senderId, {
+      stake: 500,
+      boosted: true,
+      boostStake: 100,
+    });
+    await runCommand(expedition, services, {
+      content: "加码",
+      userIndex: 1,
+      messageTimestampMs: boostTimestampMs,
+    });
+    await runCommand(expedition, services, {
+      content: "远征 稳健 80",
+      userIndex: 1,
+      messageTimestampMs: boostTimestampMs,
+    });
+    await runCommand(expedition, services, {
+      content: "取消远征",
+      userIndex: 1,
+      messageTimestampMs: boostTimestampMs,
+    });
+    await runCommand(expedition, services, {
       content: "远征 稳健 20",
       userIndex: 2,
       messageTimestampMs,
@@ -126,17 +161,36 @@ async function main(): Promise<void> {
       messageTimestampMs,
     });
     await runCommand(expedition, services, {
+      content: "加码",
+      userIndex: 2,
+      messageTimestampMs: boostTimestampMs,
+    });
+    await runCommand(expedition, services, {
+      content: "远征 冒险 10",
+      userIndex: 3,
+      messageTimestampMs,
+    });
+    await runCommand(expedition, services, {
+      content: "加码",
+      userIndex: 3,
+      messageTimestampMs: boostTimestampMs,
+    });
+    await runCommand(expedition, services, {
       content: "我的战报",
       userIndex: 0,
       messageTimestampMs,
     });
 
+    printSection("runBoostReminder");
+    await runScheduledJob(expedition, "expedition.boost-reminder", `${dateKey}T09:40:00.000Z`);
+    console.log(`boost reminder sent, messages=${sentMessages.length}`);
+
     printSection("runDailySettlement");
-    await runScheduledSettlement(expedition, dateKey);
+    await runScheduledJob(expedition, "expedition.daily-settlement", `${dateKey}T09:50:00.000Z`);
     console.log(`settled dateKey=${dateKey}, announcements=${sentMessages.length}`);
 
     printSection("runDailySettlement again");
-    await runScheduledSettlement(expedition, dateKey);
+    await runScheduledJob(expedition, "expedition.daily-settlement", `${dateKey}T09:50:00.000Z`);
     console.log("second settlement call completed");
 
     await runCommand(expedition, services, {
@@ -183,7 +237,7 @@ async function seedPoints(points: DefaultPointsService, dateKey: string): Promis
     await points.earn({
       sessionId: SMOKE_SESSION_ID,
       senderId: user.senderId,
-      amount: 500,
+      amount: user.initialPoints,
       source: EXPEDITION_PLUGIN_ID,
       description: "远征 smoke 测试积分",
       operatorId: "smoke",
@@ -215,10 +269,14 @@ async function runCommand(
   console.log(result.replyText ?? "(no reply)");
 }
 
-async function runScheduledSettlement(expedition: GatewayPlugin, dateKey: string): Promise<void> {
-  const job = expedition.scheduledJobs?.[0];
+async function runScheduledJob(
+  expedition: GatewayPlugin,
+  jobId: string,
+  timestamp: string,
+): Promise<void> {
+  const job = expedition.scheduledJobs?.find((candidate) => candidate.id === jobId);
   if (!job) {
-    throw new Error("远征插件缺少每日结算定时任务");
+    throw new Error(`远征插件缺少定时任务：${jobId}`);
   }
 
   await job.process({
@@ -227,10 +285,43 @@ async function runScheduledSettlement(expedition: GatewayPlugin, dateKey: string
       id: job.id,
       name: job.name ?? job.id,
       attemptsMade: 0,
-      timestamp: `${dateKey}T09:50:00.000Z`,
+      timestamp,
     },
     scheduler: createNoopScheduler(),
   });
+}
+
+async function assertEntryState(
+  db: PostgresStore["db"],
+  dateKey: string,
+  senderId: string,
+  expected: {
+    stake: number;
+    boosted: boolean;
+    boostStake: number;
+  },
+): Promise<void> {
+  const rows = await db
+    .select()
+    .from(expeditionEntries)
+    .where(eq(expeditionEntries.sessionId, SMOKE_SESSION_ID));
+  const entry = rows.find((row) => row.dateKey === dateKey && row.senderId === senderId);
+  if (!entry) {
+    throw new Error(`未找到远征报名记录：${senderId}`);
+  }
+  if (
+    entry.stake !== expected.stake ||
+    entry.boosted !== expected.boosted ||
+    entry.boostStake !== expected.boostStake
+  ) {
+    throw new Error(
+      `远征加码状态不符合预期：expected=${JSON.stringify(expected)}, actual=${JSON.stringify({
+        stake: entry.stake,
+        boosted: entry.boosted,
+        boostStake: entry.boostStake,
+      })}`,
+    );
+  }
 }
 
 function createContext(

@@ -1,6 +1,6 @@
 import type { GatewayPlugin, PluginBootstrapContext } from "../types.js";
 import { getBusinessDateKey } from "../../time.js";
-import { formatCheckinSuccessText } from "./checkin-content.js";
+import { formatCheckinSuccessText, formatDuplicateCheckinText } from "./checkin-content.js";
 import { CheckinStore } from "./checkin-store.js";
 
 const CHECKIN_PLUGIN_ID = "checkin";
@@ -86,7 +86,7 @@ export function createCheckinPlugin(context: PluginBootstrapContext): GatewayPlu
             );
 
             return {
-              replyText: `今天已经签到过了。\n当前积分：${result.balanceAfter}`,
+              replyText: formatDuplicateCheckinText(result.balanceAfter),
             };
           }
 
