@@ -11,6 +11,7 @@
     "gateway:dev": "pnpm --filter @agent-gateway/gateway dev",
     "gateway:checkin:smoke": "pnpm --filter @agent-gateway/gateway checkin:smoke",
     "gateway:expedition:smoke": "pnpm --filter @agent-gateway/gateway expedition:smoke",
+    "gateway:expedition:repair-names": "pnpm --filter @agent-gateway/gateway expedition:repair-names",
     "gateway:start": "pnpm --filter @agent-gateway/gateway start",
     "gateway:import:history": "pnpm --filter @agent-gateway/gateway import:history",
     "gateway:import:persona-seed": "pnpm --filter @agent-gateway/gateway import:persona-seed",

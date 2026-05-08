@@ -2,10 +2,12 @@ import type http from "node:http";
 import type { Logger } from "pino";
 import type { AppConfig } from "../../config.js";
 import {
+  type InboundMessageRecord,
   inboundRecordToNormalizedMessage,
   InboundMessageStore,
 } from "../../db/stores/index.js";
 import type { GatewayHttpRoute } from "../../http/gateway-http-server.js";
+import type { ChatRoomMemberNameResolver } from "../member-name-resolver.js";
 import type {
   InboundMessageEvent,
   MessageHistoryPage,
@@ -36,6 +38,7 @@ export class WechatHttpMessageSource implements MessageSource, MessageHistoryPro
     private readonly config: AppConfig,
     private readonly logger: Logger,
     private readonly inboundMessages: InboundMessageStore,
+    private readonly memberNameResolver: ChatRoomMemberNameResolver,
   ) {}
 
   public getRoutes(): GatewayHttpRoute[] {
@@ -156,24 +159,25 @@ export class WechatHttpMessageSource implements MessageSource, MessageHistoryPro
         }
 
         insertedCount += 1;
-        const message = inboundRecordToNormalizedMessage(result.record);
-        if (message.createdAtUnixMs < this.dispatchAfterUnixMs) {
+        if (result.record.createdAtUnixMs < this.dispatchAfterUnixMs) {
           historicalCount += 1;
           continue;
         }
 
+        const resolvedRecord = await this.resolveSenderName(result.record);
+        const message = inboundRecordToNormalizedMessage(resolvedRecord);
         dispatchedCount += 1;
         await this.onEvent({
           source: this.id,
           event: "message.new",
           sessionId: message.sessionId,
-          messageKey: result.record.messageKey,
+          messageKey: resolvedRecord.messageKey,
           groupName: message.groupName,
           content: message.content,
           sourceName: message.senderName,
           receivedAtUnixMs: Date.now(),
           normalizedMessage: message,
-          raw: result.record.rawPayload,
+          raw: resolvedRecord.rawPayload,
         });
       }
 
@@ -276,6 +280,25 @@ export class WechatHttpMessageSource implements MessageSource, MessageHistoryPro
     }
 
     throw new CallbackHttpError(401, "Unauthorized");
+  }
+
+  private async resolveSenderName(
+    record: InboundMessageRecord,
+  ): Promise<InboundMessageRecord> {
+    if (!record.isGroup || record.isFromBot || record.isSelfSent) {
+      return record;
+    }
+
+    const senderName = await this.memberNameResolver.resolveSenderName({
+      sessionId: record.sessionId,
+      senderId: record.senderId,
+      currentSenderName: record.senderName,
+    });
+    if (senderName === record.senderName) {
+      return record;
+    }
+
+    return this.inboundMessages.updateSenderName(record.id, senderName);
   }
 }
 

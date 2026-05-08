@@ -160,11 +160,11 @@ export class EventGateway {
       return;
     }
 
-    if (
+    const isFromBot =
       event.normalizedMessage?.isFromBot ||
       event.normalizedMessage?.isSelfSent ||
-      isBotSourceName(event.sourceName, this.config.botProfile)
-    ) {
+      (!event.normalizedMessage && isBotSourceName(event.sourceName, this.config.botProfile));
+    if (isFromBot) {
       this.logger.debug({ event }, "忽略机器人自己发出的入站事件，避免自触发");
       return;
     }

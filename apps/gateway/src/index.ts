@@ -13,7 +13,9 @@ import { createLogger } from "./infra/logger.js";
 import { RedisStore } from "./infra/redis-store.js";
 import { AgentRuntimeClient } from "./integrations/agent-runtime-client.js";
 import { GraphitiClient } from "./integrations/graphiti-client.js";
+import { WechatAdminClient } from "./integrations/wechat-admin-client.js";
 import { EventGateway } from "./messaging/event-gateway.js";
+import { ChatRoomMemberNameResolver } from "./messaging/member-name-resolver.js";
 import { createMessageSender } from "./messaging/senders/message-sender.js";
 import { WechatHttpMessageSource } from "./messaging/sources/wechat-http-message-source.js";
 import { WeFlowClient } from "./messaging/sources/weflow-client.js";
@@ -45,11 +47,14 @@ async function main(): Promise<void> {
   const postgresStore = new PostgresStore(config, logger);
   const inboundMessageStore = new InboundMessageStore(postgresStore.db);
   const gatewaySessionStore = new GatewaySessionStore(postgresStore.db);
+  const wechatAdminClient = WechatAdminClient.fromConfig(config);
+  const memberNameResolver = new ChatRoomMemberNameResolver(wechatAdminClient, logger);
   const weflowMessageSource = new WeFlowMessageSource(new WeFlowClient(config, logger), config);
   const wechatHttpMessageSource = new WechatHttpMessageSource(
     config,
     logger,
     inboundMessageStore,
+    memberNameResolver,
   );
   const messageSource =
     config.messageSource === "wechat-http" ? wechatHttpMessageSource : weflowMessageSource;
@@ -62,7 +67,7 @@ async function main(): Promise<void> {
   const operationRunStore = new PostgresPluginOperationRunStore(postgresStore.db);
   const pointsStore = new PointsStore(postgresStore.db);
   const pointsService = new DefaultPointsService(pointsStore);
-  const messageSender = createMessageSender(config, logger);
+  const messageSender = createMessageSender(config, logger, wechatAdminClient);
   const scheduler = new BullMqScheduler(config, logger);
   const pluginServices: PluginCommonServices = {
     sendMessage: (input) => messageSender.sendMessage(input),

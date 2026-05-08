@@ -127,6 +127,24 @@ export class InboundMessageStore {
     return rows[0] ? toRecord(rows[0]) : null;
   }
 
+  public async updateSenderName(id: number, senderName: string): Promise<InboundMessageRecord> {
+    const rows = await this.db
+      .update(inboundMessages)
+      .set({
+        senderName,
+        updatedAt: new Date(),
+      })
+      .where(eq(inboundMessages.id, id))
+      .returning();
+
+    const row = rows[0];
+    if (!row) {
+      throw new Error(`入站消息 senderName 更新失败：${id}`);
+    }
+
+    return toRecord(row);
+  }
+
   public async listRecentBySession(
     sessionId: string,
     limit: number,

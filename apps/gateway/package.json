@@ -12,6 +12,7 @@
     "start": "tsx src/index.ts",
     "checkin:smoke": "tsx src/plugins/checkin/scripts/smoke.ts",
     "expedition:smoke": "tsx src/plugins/expedition/scripts/smoke.ts",
+    "expedition:repair-names": "tsx src/plugins/expedition/scripts/repair-names.ts",
     "import:history": "tsx src/scripts/import-history.ts",
     "import:persona-seed": "tsx src/scripts/import-persona-seed.ts"
   },
