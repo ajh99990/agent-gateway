@@ -8,11 +8,15 @@ import {
 
 const EXPEDITION_KEYWORDS = [
   "远征",
+  "远征指令",
   "加码",
+  "祝福",
+  "毒奶",
   "取消远征",
   "我的战报",
   "我的遗物",
   "远征排行",
+  "我的施法",
 ];
 
 export function createExpeditionPlugin(context: PluginBootstrapContext): GatewayPlugin {
@@ -22,6 +26,7 @@ export function createExpeditionPlugin(context: PluginBootstrapContext): Gateway
     store,
     points: context.services.points,
     pluginState: context.services.pluginState,
+    pluginData: context.services.pluginData,
     operationRuns: context.services.operationRuns,
     sendMessage: context.services.sendMessage,
     logger: context.services.logger.child({ pluginId: EXPEDITION_PLUGIN_ID }),
@@ -34,7 +39,15 @@ export function createExpeditionPlugin(context: PluginBootstrapContext): Gateway
       {
         keywords: EXPEDITION_KEYWORDS,
         matches(content) {
-          return content === "远征" || content === "加码" || content.startsWith("远征 ");
+          return (
+            content === "远征" ||
+            content === "远征指令" ||
+            content === "加码" ||
+            content === "我的施法" ||
+            content.startsWith("远征 ") ||
+            content.startsWith("祝福 ") ||
+            content.startsWith("毒奶 ")
+          );
         },
         async handle(pluginContext) {
           return service.handleMessage(pluginContext);
@@ -42,6 +55,25 @@ export function createExpeditionPlugin(context: PluginBootstrapContext): Gateway
       },
     ],
     scheduledJobs: [
+      {
+        id: "expedition.random-event-tick",
+        name: "远征随机事件检查",
+        description: "每天 10:00 - 17:30 随机发布 1-2 次远征随机事件",
+        schedule: {
+          cron: "*/10 10-17 * * *",
+          timezone: EXPEDITION_TIMEZONE,
+        },
+        options: {
+          attempts: 3,
+          backoff: {
+            type: "exponential",
+            delay: 60_000,
+          },
+        },
+        async process(jobContext) {
+          await service.runRandomEventTick(jobContext.execution.timestamp);
+        },
+      },
       {
         id: "expedition.boost-reminder",
         name: "远征加码开放提醒",

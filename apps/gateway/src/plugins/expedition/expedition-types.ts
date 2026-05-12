@@ -8,6 +8,8 @@ export type ExpeditionStrategy = "steady" | "adventure" | "crazy";
 export type ExpeditionEntryStatus = "registered" | "cancelled" | "settled";
 export type ExpeditionOutcome = "survived" | "dead";
 export type ExpeditionRelicRarity = "common" | "rare" | "epic" | "legendary";
+export type ExpeditionCastType = "blessing" | "jinx";
+export type ExpeditionRandomEventType = "flavor" | "global" | "targeted" | "tradeoff" | "idle";
 export type ExpeditionRelicEffectType =
   | "survival"
   | "greed"
@@ -71,6 +73,47 @@ export interface ExpeditionRelicRecord {
   active: boolean;
   createdAt: Date;
   updatedAt: Date;
+}
+
+export interface ExpeditionCastRecord {
+  id: number;
+  sessionId: string;
+  groupName?: string;
+  dateKey: string;
+  casterId: string;
+  casterName: string;
+  targetId: string;
+  targetName: string;
+  castType: ExpeditionCastType;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface ExpeditionRandomEventEffectValue {
+  advanceDelta?: number;
+  survivalBpDelta?: number;
+  multiplierBpDelta?: number;
+  dropRateBpDelta?: number;
+  qualityDelta?: number;
+  purificationBpDelta?: number;
+  rewardPoints?: number;
+}
+
+export interface ExpeditionRandomEventRecord {
+  id: number;
+  sessionId: string;
+  groupName?: string;
+  dateKey: string;
+  eventKey: string;
+  eventType: ExpeditionRandomEventType;
+  title: string;
+  messageText: string;
+  targetSenderId?: string;
+  targetSenderName?: string;
+  targetEntryId?: number;
+  targetEntryRevision?: number;
+  effectValue: ExpeditionRandomEventEffectValue;
+  createdAt: Date;
 }
 
 export interface ExpeditionWorldRecord {

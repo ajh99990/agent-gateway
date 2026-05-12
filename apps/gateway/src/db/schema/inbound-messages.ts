@@ -32,6 +32,7 @@ export const inboundMessages = pgTable(
     isSelfSent: boolean("is_self_sent").default(false).notNull(),
     isFromBot: boolean("is_from_bot").default(false).notNull(),
     isMentionBot: boolean("is_mention_bot").default(false).notNull(),
+    mentionedWxids: jsonb("mentioned_wxids").$type<string[]>().default(sql`'[]'::jsonb`).notNull(),
     createdAtUnixMs: bigint("created_at_unix_ms", { mode: "number" }).notNull(),
     rawPayload: jsonb("raw_payload").$type<JsonValue>(),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),

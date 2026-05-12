@@ -4,6 +4,7 @@ import {
   bigint,
   boolean,
   check,
+  index,
   integer,
   jsonb,
   pgTable,
@@ -102,6 +103,75 @@ export const expeditionRelics = pgTable(
     check(
       "expedition_relics_effect_type_check",
       sql`${table.effectType} in ('survival', 'greed', 'dive', 'luck', 'purification', 'curse')`,
+    ),
+  ],
+);
+
+export const expeditionCasts = pgTable(
+  "expedition_casts",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    sessionId: text("session_id").notNull(),
+    groupName: text("group_name"),
+    dateKey: text("date_key").notNull(),
+    casterId: text("caster_id").notNull(),
+    casterName: text("caster_name").notNull(),
+    targetId: text("target_id").notNull(),
+    targetName: text("target_name").notNull(),
+    castType: text("cast_type").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    unique("expedition_casts_daily_caster_target_unique").on(
+      table.sessionId,
+      table.dateKey,
+      table.casterId,
+      table.targetId,
+    ),
+    index("expedition_casts_target_idx").on(table.sessionId, table.dateKey, table.targetId),
+    index("expedition_casts_caster_idx").on(table.sessionId, table.dateKey, table.casterId),
+    check(
+      "expedition_casts_type_check",
+      sql`${table.castType} in ('blessing', 'jinx')`,
+    ),
+  ],
+);
+
+export const expeditionRandomEvents = pgTable(
+  "expedition_random_events",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    sessionId: text("session_id").notNull(),
+    groupName: text("group_name"),
+    dateKey: text("date_key").notNull(),
+    eventKey: text("event_key").notNull(),
+    eventType: text("event_type").notNull(),
+    title: text("title").notNull(),
+    messageText: text("message_text").notNull(),
+    targetSenderId: text("target_sender_id"),
+    targetSenderName: text("target_sender_name"),
+    targetEntryId: bigint("target_entry_id", { mode: "number" }),
+    targetEntryRevision: integer("target_entry_revision"),
+    effectValue: jsonb("effect_value").$type<JsonValue>().default(sql`'{}'::jsonb`).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    unique("expedition_random_events_target_unique").on(
+      table.sessionId,
+      table.dateKey,
+      table.eventKey,
+      table.targetSenderId,
+    ),
+    index("expedition_random_events_session_date_idx").on(table.sessionId, table.dateKey),
+    index("expedition_random_events_target_idx").on(
+      table.sessionId,
+      table.dateKey,
+      table.targetSenderId,
+    ),
+    check(
+      "expedition_random_events_type_check",
+      sql`${table.eventType} in ('flavor', 'global', 'targeted', 'tradeoff', 'idle')`,
     ),
   ],
 );

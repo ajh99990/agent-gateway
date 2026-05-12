@@ -21,6 +21,7 @@ export interface InboundMessageRecord {
   isSelfSent: boolean;
   isFromBot: boolean;
   isMentionBot: boolean;
+  mentionedWxids: string[];
   createdAtUnixMs: number;
   rawPayload?: JsonValue;
   createdAt: Date;
@@ -43,6 +44,7 @@ export interface CreateInboundMessageInput {
   isSelfSent: boolean;
   isFromBot: boolean;
   isMentionBot: boolean;
+  mentionedWxids: string[];
   createdAtUnixMs: number;
   rawPayload?: JsonValue;
 }
@@ -80,6 +82,7 @@ export class InboundMessageStore {
         isSelfSent: input.isSelfSent,
         isFromBot: input.isFromBot,
         isMentionBot: input.isMentionBot,
+        mentionedWxids: input.mentionedWxids,
         createdAtUnixMs: input.createdAtUnixMs,
         rawPayload: input.rawPayload,
         createdAt: now,
@@ -181,6 +184,7 @@ export function inboundRecordToNormalizedMessage(record: InboundMessageRecord): 
     isSelfSent: record.isSelfSent,
     isFromBot: record.isFromBot,
     isMentionBot: record.isMentionBot,
+    mentionedWxids: record.mentionedWxids,
     fingerprint: `${record.source}:${record.id}`,
   };
 }
@@ -203,9 +207,25 @@ function toRecord(row: typeof inboundMessages.$inferSelect): InboundMessageRecor
     isSelfSent: row.isSelfSent,
     isFromBot: row.isFromBot,
     isMentionBot: row.isMentionBot,
+    mentionedWxids: normalizeMentionedWxids(row.mentionedWxids),
     createdAtUnixMs: row.createdAtUnixMs,
     rawPayload: row.rawPayload ?? undefined,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
+}
+
+function normalizeMentionedWxids(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return Array.from(
+    new Set(
+      value
+        .filter((item): item is string => typeof item === "string")
+        .map((item) => item.trim())
+        .filter(Boolean),
+    ),
+  );
 }

@@ -64,6 +64,27 @@
       "when": 1778107345184,
       "tag": "0008_yellow_microbe",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1778598458455,
+      "tag": "0009_petite_vanisher",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1778602742243,
+      "tag": "0010_slimy_professor_monster",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1778603315421,
+      "tag": "0011_clean_hydra",
+      "breakpoints": true
     }
   ]
 }

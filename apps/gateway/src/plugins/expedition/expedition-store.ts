@@ -1,9 +1,11 @@
-import { and, asc, desc, eq, gt, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, ne, sql } from "drizzle-orm";
 import type { GatewayDatabase, GatewayTransaction } from "../../db/client.js";
 import type { JsonValue } from "../../db/json.js";
 import {
   expeditionEntries,
+  expeditionCasts,
   expeditionPlayers,
+  expeditionRandomEvents,
   expeditionRelics,
   expeditionReports,
   expeditionWorlds,
@@ -12,9 +14,14 @@ import type {
   ExpeditionEntryPlan,
   ExpeditionEntryRecord,
   ExpeditionEntryStatus,
+  ExpeditionCastRecord,
+  ExpeditionCastType,
   ExpeditionOutcome,
   ExpeditionPlayerRecord,
   ExpeditionRankingRecord,
+  ExpeditionRandomEventEffectValue,
+  ExpeditionRandomEventRecord,
+  ExpeditionRandomEventType,
   ExpeditionRelicEffectValue,
   ExpeditionRelicRecord,
   ExpeditionReportRecord,
@@ -364,6 +371,254 @@ export class ExpeditionStore {
       );
   }
 
+  public async findCast(input: {
+    sessionId: string;
+    dateKey: string;
+    casterId: string;
+    targetId: string;
+  }): Promise<ExpeditionCastRecord | null> {
+    const rows = await this.executor()
+      .select()
+      .from(expeditionCasts)
+      .where(
+        and(
+          eq(expeditionCasts.sessionId, input.sessionId),
+          eq(expeditionCasts.dateKey, input.dateKey),
+          eq(expeditionCasts.casterId, input.casterId),
+          eq(expeditionCasts.targetId, input.targetId),
+        ),
+      )
+      .limit(1);
+
+    return rows[0] ? toCastRecord(rows[0]) : null;
+  }
+
+  public async countCasterCasts(input: {
+    sessionId: string;
+    dateKey: string;
+    casterId: string;
+  }): Promise<number> {
+    const rows = await this.executor()
+      .select({
+        count: sql<number>`count(*)::int`,
+      })
+      .from(expeditionCasts)
+      .where(
+        and(
+          eq(expeditionCasts.sessionId, input.sessionId),
+          eq(expeditionCasts.dateKey, input.dateKey),
+          eq(expeditionCasts.casterId, input.casterId),
+        ),
+      );
+
+    return Number(rows[0]?.count ?? 0);
+  }
+
+  public async createCast(input: {
+    sessionId: string;
+    groupName?: string;
+    dateKey: string;
+    casterId: string;
+    casterName: string;
+    targetId: string;
+    targetName: string;
+    castType: ExpeditionCastType;
+  }): Promise<ExpeditionCastRecord> {
+    const now = new Date();
+    const rows = await this.executor()
+      .insert(expeditionCasts)
+      .values({
+        ...input,
+        createdAt: now,
+        updatedAt: now,
+      })
+      .returning();
+
+    return requireCast(rows[0]);
+  }
+
+  public async updateCast(
+    cast: ExpeditionCastRecord,
+    input: {
+      groupName?: string;
+      casterName: string;
+      targetName: string;
+      castType: ExpeditionCastType;
+    },
+  ): Promise<ExpeditionCastRecord> {
+    const rows = await this.executor()
+      .update(expeditionCasts)
+      .set({
+        groupName: input.groupName,
+        casterName: input.casterName,
+        targetName: input.targetName,
+        castType: input.castType,
+        updatedAt: new Date(),
+      })
+      .where(eq(expeditionCasts.id, cast.id))
+      .returning();
+
+    return requireCast(rows[0]);
+  }
+
+  public async listCastsByCaster(input: {
+    sessionId: string;
+    dateKey: string;
+    casterId: string;
+  }): Promise<ExpeditionCastRecord[]> {
+    const rows = await this.executor()
+      .select()
+      .from(expeditionCasts)
+      .where(
+        and(
+          eq(expeditionCasts.sessionId, input.sessionId),
+          eq(expeditionCasts.dateKey, input.dateKey),
+          eq(expeditionCasts.casterId, input.casterId),
+        ),
+      )
+      .orderBy(asc(expeditionCasts.createdAt));
+
+    return rows.map(toCastRecord);
+  }
+
+  public async listCastsForTarget(input: {
+    sessionId: string;
+    dateKey: string;
+    targetId: string;
+  }): Promise<ExpeditionCastRecord[]> {
+    const rows = await this.executor()
+      .select()
+      .from(expeditionCasts)
+      .where(
+        and(
+          eq(expeditionCasts.sessionId, input.sessionId),
+          eq(expeditionCasts.dateKey, input.dateKey),
+          eq(expeditionCasts.targetId, input.targetId),
+        ),
+      )
+      .orderBy(asc(expeditionCasts.createdAt));
+
+    return rows.map(toCastRecord);
+  }
+
+  public async listRandomEvents(
+    sessionId: string,
+    dateKey: string,
+  ): Promise<ExpeditionRandomEventRecord[]> {
+    const rows = await this.executor()
+      .select()
+      .from(expeditionRandomEvents)
+      .where(
+        and(
+          eq(expeditionRandomEvents.sessionId, sessionId),
+          eq(expeditionRandomEvents.dateKey, dateKey),
+        ),
+      )
+      .orderBy(asc(expeditionRandomEvents.createdAt), asc(expeditionRandomEvents.id));
+
+    return rows.map(toRandomEventRecord);
+  }
+
+  public async listRandomEventsForTarget(input: {
+    sessionId: string;
+    dateKey: string;
+    targetSenderId: string;
+  }): Promise<ExpeditionRandomEventRecord[]> {
+    const rows = await this.executor()
+      .select()
+      .from(expeditionRandomEvents)
+      .where(
+        and(
+          eq(expeditionRandomEvents.sessionId, input.sessionId),
+          eq(expeditionRandomEvents.dateKey, input.dateKey),
+          eq(expeditionRandomEvents.targetSenderId, input.targetSenderId),
+        ),
+      )
+      .orderBy(asc(expeditionRandomEvents.createdAt), asc(expeditionRandomEvents.id));
+
+    return rows.map(toRandomEventRecord);
+  }
+
+  public async listRandomEventKeys(sessionId: string, dateKey: string): Promise<string[]> {
+    const rows = await this.executor()
+      .selectDistinct({
+        eventKey: expeditionRandomEvents.eventKey,
+      })
+      .from(expeditionRandomEvents)
+      .where(
+        and(
+          eq(expeditionRandomEvents.sessionId, sessionId),
+          eq(expeditionRandomEvents.dateKey, dateKey),
+        ),
+      );
+
+    return rows.map((row) => row.eventKey);
+  }
+
+  public async hasIdleRandomEvent(sessionId: string, dateKey: string): Promise<boolean> {
+    const rows = await this.executor()
+      .select({ id: expeditionRandomEvents.id })
+      .from(expeditionRandomEvents)
+      .where(
+        and(
+          eq(expeditionRandomEvents.sessionId, sessionId),
+          eq(expeditionRandomEvents.dateKey, dateKey),
+          eq(expeditionRandomEvents.eventType, "idle"),
+        ),
+      )
+      .limit(1);
+
+    return rows.length > 0;
+  }
+
+  public async insertRandomEvent(input: {
+    sessionId: string;
+    groupName?: string;
+    dateKey: string;
+    eventKey: string;
+    eventType: ExpeditionRandomEventType;
+    title: string;
+    messageText: string;
+    targetSenderId?: string;
+    targetSenderName?: string;
+    targetEntryId?: number;
+    targetEntryRevision?: number;
+    effectValue?: ExpeditionRandomEventEffectValue;
+  }): Promise<ExpeditionRandomEventRecord> {
+    const rows = await this.executor()
+      .insert(expeditionRandomEvents)
+      .values({
+        ...input,
+        effectValue: (input.effectValue ?? {}) as JsonValue,
+        createdAt: new Date(),
+      })
+      .returning();
+
+    return requireRandomEvent(rows[0]);
+  }
+
+  public async listHistoricalParticipants(input: {
+    sessionId: string;
+    dateKey: string;
+  }): Promise<Array<{ senderId: string; senderName: string }>> {
+    const rows = await this.executor()
+      .selectDistinct({
+        senderId: expeditionEntries.senderId,
+        senderName: expeditionEntries.senderName,
+      })
+      .from(expeditionEntries)
+      .where(
+        and(
+          eq(expeditionEntries.sessionId, input.sessionId),
+          eq(expeditionEntries.dateKey, input.dateKey),
+          ne(expeditionEntries.status, "cancelled"),
+        ),
+      )
+      .orderBy(asc(expeditionEntries.senderName));
+
+    return rows;
+  }
+
   public async getOrCreateWorld(
     sessionId: string,
     groupName: string | undefined,
@@ -548,6 +803,24 @@ function requireRelic(row: typeof expeditionRelics.$inferSelect | undefined): Ex
   return toRelicRecord(row);
 }
 
+function requireCast(row: typeof expeditionCasts.$inferSelect | undefined): ExpeditionCastRecord {
+  if (!row) {
+    throw new Error("远征施法记录写入失败");
+  }
+
+  return toCastRecord(row);
+}
+
+function requireRandomEvent(
+  row: typeof expeditionRandomEvents.$inferSelect | undefined,
+): ExpeditionRandomEventRecord {
+  if (!row) {
+    throw new Error("远征随机事件记录写入失败");
+  }
+
+  return toRandomEventRecord(row);
+}
+
 function requireWorld(row: typeof expeditionWorlds.$inferSelect | undefined): ExpeditionWorldRecord {
   if (!row) {
     throw new Error("远征世界状态写入失败");
@@ -606,6 +879,43 @@ function toRelicRecord(row: typeof expeditionRelics.$inferSelect): ExpeditionRel
     active: row.active,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
+  };
+}
+
+function toCastRecord(row: typeof expeditionCasts.$inferSelect): ExpeditionCastRecord {
+  return {
+    id: row.id,
+    sessionId: row.sessionId,
+    groupName: row.groupName ?? undefined,
+    dateKey: row.dateKey,
+    casterId: row.casterId,
+    casterName: row.casterName,
+    targetId: row.targetId,
+    targetName: row.targetName,
+    castType: row.castType as ExpeditionCastType,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
+function toRandomEventRecord(
+  row: typeof expeditionRandomEvents.$inferSelect,
+): ExpeditionRandomEventRecord {
+  return {
+    id: row.id,
+    sessionId: row.sessionId,
+    groupName: row.groupName ?? undefined,
+    dateKey: row.dateKey,
+    eventKey: row.eventKey,
+    eventType: row.eventType as ExpeditionRandomEventType,
+    title: row.title,
+    messageText: row.messageText,
+    targetSenderId: row.targetSenderId ?? undefined,
+    targetSenderName: row.targetSenderName ?? undefined,
+    targetEntryId: row.targetEntryId ?? undefined,
+    targetEntryRevision: row.targetEntryRevision ?? undefined,
+    effectValue: row.effectValue as ExpeditionRandomEventEffectValue,
+    createdAt: row.createdAt,
   };
 }
 

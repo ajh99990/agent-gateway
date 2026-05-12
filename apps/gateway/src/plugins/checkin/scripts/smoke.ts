@@ -279,6 +279,7 @@ function createContext(
       isSelfSent: false,
       isFromBot: false,
       isMentionBot: false,
+      mentionedWxids: [],
       fingerprint,
     },
     services,

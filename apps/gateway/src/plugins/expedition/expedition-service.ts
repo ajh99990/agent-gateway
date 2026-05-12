@@ -5,6 +5,7 @@ import type { PointsService } from "../../db/services/index.js";
 import { getBusinessDateKey, getDailyCutoffAt, isBeforeDailyCutoff } from "../../time.js";
 import type {
   PluginContext,
+  PluginDataStore,
   PluginHandleResult,
   PluginOperationRunStore,
   PluginStateStore,
@@ -24,12 +25,29 @@ import {
   STRATEGY_LABELS,
   renderTemplate,
 } from "./expedition-content.js";
+import {
+  collectRelicBonuses,
+} from "./expedition-modifiers.js";
+import type { ExpeditionModifier } from "./expedition-modifiers.js";
+import {
+  RANDOM_EVENT_DEFINITIONS,
+} from "./expedition-random-events.js";
+import {
+  STRATEGY_CONFIG,
+  modifierSourcesToDetails,
+  modifierTotalsToDetails,
+  resolveExpeditionSettlement,
+} from "./expedition-resolution.js";
 import { ExpeditionStore } from "./expedition-store.js";
 import type {
   ExpeditionEntryPlan,
   ExpeditionEntryRecord,
+  ExpeditionCastRecord,
+  ExpeditionCastType,
   ExpeditionOutcome,
   ExpeditionPlayerRecord,
+  ExpeditionRandomEventEffectValue,
+  ExpeditionRandomEventRecord,
   ExpeditionRelicEffectType,
   ExpeditionRelicEffectValue,
   ExpeditionRelicRarity,
@@ -48,50 +66,11 @@ const MIN_STAKE = 10;
 const MAX_STAKE_RATE = 0.8;
 const INITIAL_BOSS_POLLUTION = 1_000_000;
 const BOOST_WINDOW_START = "17:40";
-const BOOST_MULTIPLIER_BONUS_BP = 5000;
-const BOOST_SURVIVAL_PENALTY_BP = 1000;
-
-const STRATEGY_CONFIG: Record<ExpeditionStrategy, {
-  advanceMin: number;
-  advanceMax: number;
-  survivalBp: number;
-  multiplierMinBp: number;
-  multiplierMaxBp: number;
-  dropRateBp: number;
-  qualityModifier: number;
-  purificationMultiplierBp: number;
-}> = {
-  steady: {
-    advanceMin: 2,
-    advanceMax: 4,
-    survivalBp: 9000,
-    multiplierMinBp: 11000,
-    multiplierMaxBp: 15000,
-    dropRateBp: 2000,
-    qualityModifier: -20,
-    purificationMultiplierBp: 7000,
-  },
-  adventure: {
-    advanceMin: 4,
-    advanceMax: 7,
-    survivalBp: 7200,
-    multiplierMinBp: 15000,
-    multiplierMaxBp: 28000,
-    dropRateBp: 5000,
-    qualityModifier: 0,
-    purificationMultiplierBp: 10000,
-  },
-  crazy: {
-    advanceMin: 7,
-    advanceMax: 12,
-    survivalBp: 4800,
-    multiplierMinBp: 30000,
-    multiplierMaxBp: 80000,
-    dropRateBp: 8000,
-    qualityModifier: 40,
-    purificationMultiplierBp: 15000,
-  },
-};
+const RANDOM_EVENT_WINDOW_START = "10:00";
+const RANDOM_EVENT_WINDOW_END = "17:30";
+const RANDOM_EVENT_SLOT_INTERVAL_MINUTES = 10;
+const MAX_CASTS_PER_DAY = 3;
+const IDLE_EVENT_REWARD_POINTS = 10;
 
 const RELIC_EFFECT_VALUES: Record<ExpeditionRelicRarity, Record<ExpeditionRelicEffectType, ExpeditionRelicEffectValue>> = {
   common: {
@@ -133,19 +112,10 @@ interface ExpeditionServiceOptions {
   store: ExpeditionStore;
   points: PointsService;
   pluginState: PluginStateStore;
+  pluginData: PluginDataStore;
   operationRuns: PluginOperationRunStore;
   sendMessage(input: SendMessageInput): Promise<void>;
   logger: Logger;
-}
-
-interface ExpeditionBonuses {
-  survivalBonusBp: number;
-  multiplierBonusBp: number;
-  diveBonus: number;
-  dropRateBonusBp: number;
-  qualityBonus: number;
-  purificationBonusBp: number;
-  curseSurvivalPenaltyBp: number;
 }
 
 interface SettlementResult {
@@ -158,12 +128,28 @@ export class ExpeditionService {
 
   public async handleMessage(context: PluginContext): Promise<PluginHandleResult> {
     const content = context.content.trim();
+    if (content === "远征指令") {
+      return this.replyToSender(expeditionCommandMenuText());
+    }
+
     if (content === "取消远征") {
       return this.replyToSender(await this.cancelEntry(context));
     }
 
     if (content === "加码") {
       return this.replyToSender(await this.boostEntry(context));
+    }
+
+    if (content.startsWith("祝福 ")) {
+      return this.replyToSender(await this.castSpell(context, "blessing"));
+    }
+
+    if (content.startsWith("毒奶 ")) {
+      return this.replyToSender(await this.castSpell(context, "jinx"));
+    }
+
+    if (content === "我的施法") {
+      return this.replyToSender(await this.getMyCasts(context));
     }
 
     if (content === "我的战报") {
@@ -276,6 +262,193 @@ export class ExpeditionService {
     if (errors.length > 0) {
       throw new Error(`加码开放提醒发送失败：${errors.length} 个群发送失败`);
     }
+  }
+
+  public async runRandomEventTick(timestamp: string): Promise<void> {
+    const tickDate = new Date(timestamp);
+    if (!isWithinRandomEventWindow(tickDate)) {
+      return;
+    }
+
+    const dateKey = getBusinessDateKey(tickDate, EXPEDITION_TIMEZONE);
+    const slotKey = getLocalTimeKey(tickDate, EXPEDITION_TIMEZONE);
+    const sessions = await this.options.pluginState.listEnabledSessions(EXPEDITION_PLUGIN_ID, true);
+    const errors: unknown[] = [];
+
+    for (const session of sessions) {
+      const plan = await this.getOrCreateRandomEventPlan(session.sessionId, dateKey);
+      if (!plan.slots.includes(slotKey)) {
+        continue;
+      }
+
+      const operation = await this.options.operationRuns.tryStart({
+        pluginId: EXPEDITION_PLUGIN_ID,
+        scope: "session",
+        scopeId: session.sessionId,
+        operationKey: randomEventOperationKey(dateKey, slotKey),
+        metadata: { dateKey, slotKey },
+        retryFailed: true,
+      });
+
+      if (!operation.started) {
+        continue;
+      }
+
+      try {
+        const result = await this.dispatchRandomEvent(session.sessionId, session.groupName, dateKey, slotKey);
+        await this.options.operationRuns.markSucceeded(operation.run.id, {
+          dateKey,
+          slotKey,
+          skipped: !result.dispatched,
+          ...(result.eventKey ? { eventKey: result.eventKey } : {}),
+        });
+      } catch (error) {
+        await this.options.operationRuns.markFailed(operation.run.id, error, { dateKey, slotKey });
+        errors.push(error);
+      }
+    }
+
+    if (errors.length > 0) {
+      throw new Error(`远征随机事件发送失败：${errors.length} 个群发送失败`);
+    }
+  }
+
+  private async getOrCreateRandomEventPlan(
+    sessionId: string,
+    dateKey: string,
+  ): Promise<{ dateKey: string; slots: string[] }> {
+    const key = randomEventPlanKey(dateKey);
+    const existing = await this.options.pluginData.getValue<{
+      dateKey?: string;
+      slots?: string[];
+    }>(EXPEDITION_PLUGIN_ID, sessionId, key);
+
+    if (
+      existing?.dateKey === dateKey &&
+      Array.isArray(existing.slots) &&
+      existing.slots.every((slot) => typeof slot === "string")
+    ) {
+      return { dateKey, slots: existing.slots };
+    }
+
+    const slots = pickRandomEventSlots();
+    const plan = { dateKey, slots };
+    await this.options.pluginData.setValue(EXPEDITION_PLUGIN_ID, sessionId, key, plan);
+    return plan;
+  }
+
+  private async dispatchRandomEvent(
+    sessionId: string,
+    groupName: string | undefined,
+    dateKey: string,
+    slotKey: string,
+  ): Promise<{ dispatched: boolean; eventKey?: string }> {
+    const entries = await this.options.store.listRegisteredEntries(sessionId, dateKey);
+    const todayParticipantIds = new Set(entries.map((entry) => entry.senderId));
+    const yesterdayParticipants = await this.options.store.listHistoricalParticipants({
+      sessionId,
+      dateKey: previousDateKey(dateKey),
+    });
+    const idleAlreadyTriggered = await this.options.store.hasIdleRandomEvent(sessionId, dateKey);
+    const idleCandidates = idleAlreadyTriggered
+      ? []
+      : yesterdayParticipants.filter((participant) => !todayParticipantIds.has(participant.senderId));
+    const ordinaryEvents = entries.length > 0
+      ? RANDOM_EVENT_DEFINITIONS.filter((event) => event.type !== "idle")
+      : [];
+    const idleEvents = idleCandidates.length > 0
+      ? RANDOM_EVENT_DEFINITIONS.filter((event) => event.type === "idle")
+      : [];
+    const candidates = [...ordinaryEvents, ...idleEvents];
+
+    if (candidates.length === 0) {
+      return { dispatched: false };
+    }
+
+    const event = sample(candidates);
+    const eventKey = `${slotKey}:${event.key}`;
+
+    if (event.type === "idle") {
+      const target = sample(idleCandidates);
+      const messageText = renderTemplate(event.template, { player: target.senderName });
+      await this.options.db.transaction(async (tx) => {
+        const store = this.options.store.withTransaction(tx);
+        const points = this.options.points.withTransaction(tx);
+        await points.earn({
+          sessionId,
+          senderId: target.senderId,
+          amount: event.effect?.rewardPoints ?? IDLE_EVENT_REWARD_POINTS,
+          source: EXPEDITION_PLUGIN_ID,
+          description: "远征留守事件奖励",
+          operatorId: "system",
+          idempotencyKey: `${EXPEDITION_PLUGIN_ID}:${dateKey}:${sessionId}:${target.senderId}:idle-event:${slotKey}`,
+          metadata: {
+            pluginId: EXPEDITION_PLUGIN_ID,
+            action: "idle_random_event_reward",
+            dateKey,
+            slotKey,
+            eventKey: event.key,
+          },
+        });
+        await store.insertRandomEvent({
+          sessionId,
+          groupName,
+          dateKey,
+          eventKey,
+          eventType: event.type,
+          title: event.title,
+          messageText,
+          targetSenderId: target.senderId,
+          targetSenderName: target.senderName,
+          effectValue: event.effect,
+        });
+      });
+      await this.options.sendMessage({ sessionId, groupName, text: messageText });
+      return { dispatched: true, eventKey };
+    }
+
+    if (event.type === "flavor") {
+      await this.options.store.insertRandomEvent({
+        sessionId,
+        groupName,
+        dateKey,
+        eventKey,
+        eventType: event.type,
+        title: event.title,
+        messageText: event.template,
+        effectValue: event.effect,
+      });
+      await this.options.sendMessage({ sessionId, groupName, text: event.template });
+      return { dispatched: true, eventKey };
+    }
+
+    const affectedEntries = event.type === "targeted"
+      ? [sample(entries)]
+      : entries;
+    const messagePlayer = affectedEntries[0]?.senderName ?? "";
+    const messageText = renderTemplate(event.template, { player: messagePlayer });
+
+    await this.options.db.transaction(async (tx) => {
+      const store = this.options.store.withTransaction(tx);
+      for (const entry of affectedEntries) {
+        await store.insertRandomEvent({
+          sessionId,
+          groupName,
+          dateKey,
+          eventKey,
+          eventType: event.type,
+          title: event.title,
+          messageText,
+          targetSenderId: entry.senderId,
+          targetSenderName: entry.senderName,
+          targetEntryId: entry.id,
+          targetEntryRevision: entry.revision,
+          effectValue: event.effect,
+        });
+      }
+    });
+    await this.options.sendMessage({ sessionId, groupName, text: messageText });
+    return { dispatched: true, eventKey };
   }
 
   private async registerEntry(context: PluginContext): Promise<string> {
@@ -465,6 +638,114 @@ export class ExpeditionService {
     return boostedText(result.boostStake, result.entry.stake, result.balanceAfter);
   }
 
+  private async castSpell(context: PluginContext, castType: ExpeditionCastType): Promise<string> {
+    const messageDate = new Date(context.message.createdAtUnixMs);
+    if (!isBeforeDailyCutoff(messageDate, EXPEDITION_SETTLEMENT_CUTOFF, EXPEDITION_TIMEZONE)) {
+      return castClosedText();
+    }
+
+    const targetId = resolveMentionTarget(context);
+    if (!targetId) {
+      return castTargetMissingText(castType);
+    }
+    if (targetId === context.message.senderId) {
+      return castSelfText();
+    }
+
+    const dateKey = getBusinessDateKey(messageDate, EXPEDITION_TIMEZONE);
+    const result = await this.options.db.transaction(async (tx) => {
+      const store = this.options.store.withTransaction(tx);
+      const targetEntry = await store.findEntry(context.sessionId, dateKey, targetId);
+      if (!targetEntry || targetEntry.status !== "registered") {
+        return {
+          ok: false as const,
+          message: castTargetNotRegisteredText(),
+        };
+      }
+
+      const existing = await store.findCast({
+        sessionId: context.sessionId,
+        dateKey,
+        casterId: context.message.senderId,
+        targetId,
+      });
+
+      if (!existing) {
+        const count = await store.countCasterCasts({
+          sessionId: context.sessionId,
+          dateKey,
+          casterId: context.message.senderId,
+        });
+        if (count >= MAX_CASTS_PER_DAY) {
+          return {
+            ok: false as const,
+            message: castLimitText(),
+          };
+        }
+
+        const cast = await store.createCast({
+          sessionId: context.sessionId,
+          groupName: context.groupName,
+          dateKey,
+          casterId: context.message.senderId,
+          casterName: context.message.senderName,
+          targetId,
+          targetName: targetEntry.senderName,
+          castType,
+        });
+
+        return {
+          ok: true as const,
+          created: true,
+          cast,
+          remainingCasts: MAX_CASTS_PER_DAY - count - 1,
+        };
+      }
+
+      const cast = await store.updateCast(existing, {
+        groupName: context.groupName,
+        casterName: context.message.senderName,
+        targetName: targetEntry.senderName,
+        castType,
+      });
+      const count = await store.countCasterCasts({
+        sessionId: context.sessionId,
+        dateKey,
+        casterId: context.message.senderId,
+      });
+
+      return {
+        ok: true as const,
+        created: false,
+        cast,
+        remainingCasts: MAX_CASTS_PER_DAY - count,
+      };
+    });
+
+    if (!result.ok) {
+      return result.message;
+    }
+
+    return result.created
+      ? castSuccessText(result.cast, result.remainingCasts)
+      : castModifiedText(result.cast);
+  }
+
+  private async getMyCasts(context: PluginContext): Promise<string> {
+    const dateKey = getBusinessDateKey(new Date(context.message.createdAtUnixMs), EXPEDITION_TIMEZONE);
+    const casts = await this.options.store.listCastsByCaster({
+      sessionId: context.sessionId,
+      dateKey,
+      casterId: context.message.senderId,
+    });
+
+    if (casts.length === 0) {
+      return myCastsEmptyText();
+    }
+
+    return myCastsText(casts);
+  }
+
   private async cancelEntry(context: PluginContext): Promise<string> {
     const messageDate = new Date(context.message.createdAtUnixMs);
     if (!isBeforeDailyCutoff(messageDate, EXPEDITION_SETTLEMENT_CUTOFF, EXPEDITION_TIMEZONE)) {
@@ -515,10 +796,10 @@ export class ExpeditionService {
     }
 
     if (!result.cancelled) {
-      return "你今天还没有报名远征。\n\n咪露看着空空的登记簿，尾巴晃了一下：\n“你还没出发就想取消，预判得很熟练喵。”";
+      return notRegisteredCancelText();
     }
 
-    return `已取消今日远征，投入积分已返还。\n当前积分：${result.balance}\n\n咪露把任务牌塞回抽屉，懒洋洋地打了个哈欠：\n“逃跑也算战术喵。虽然一点都不帅。”`;
+    return cancelledText(result.balance);
   }
 
   private async getMyReport(context: PluginContext): Promise<string> {
@@ -534,10 +815,10 @@ export class ExpeditionService {
 
     const entry = await this.options.store.findEntry(context.sessionId, dateKey, context.message.senderId);
     if (entry?.status === "registered") {
-      return `今日远征尚未结算。\n\n结算时间：${EXPEDITION_SETTLEMENT_CUTOFF}\n咪露趴在柜台上看钟：\n“急什么喵？再催的话，咪露就把你的战报压到最下面。”`;
+      return reportPendingText();
     }
 
-    return "今天没有你的远征记录。\n\n咪露翻了翻登记簿，露出甜甜的笑：\n“你今天明明没出门喵，不可以假装自己刚拯救世界。”";
+    return noReportText();
   }
 
   private async getMyRelics(context: PluginContext): Promise<string> {
@@ -547,14 +828,14 @@ export class ExpeditionService {
       10,
     );
     if (relics.length === 0) {
-      return "你当前没有遗物。\n\n咪露递来一个空盒子，认真地点点头：\n“给，至少看起来像你有战利品了喵。”";
+      return noRelicText();
     }
 
     const allRelics = await this.options.store.listActiveRelics(
       context.sessionId,
       context.message.senderId,
     );
-    const bonuses = collectBonuses(allRelics);
+    const bonuses = collectRelicBonuses(allRelics);
     const lines = [
       `当前遗物：${allRelics.length} 件`,
       `生还率加成：+${formatPercentBp(bonuses.survivalBonusBp)}`,
@@ -580,7 +861,7 @@ export class ExpeditionService {
 
     const ranking = await this.options.store.listRanking(context.sessionId, 10);
     if (ranking.length === 0) {
-      return "当前还没有人站上远征排行。\n\n咪露擦了擦空白榜单：\n“今天大家都好谨慎喵，真无聊。”";
+      return emptyRankingText();
     }
 
     return [
@@ -652,6 +933,7 @@ export class ExpeditionService {
   ): Promise<ExpeditionSettlementSummary> {
     const entries = await store.listRegisteredEntries(sessionId, dateKey);
     const world = await store.getOrCreateWorld(sessionId, groupName, sample(BOSS_NAMES));
+    const randomEvents = await store.listRandomEvents(sessionId, dateKey);
     const results: SettlementResult[] = [];
     let totalPurification = 0;
 
@@ -662,7 +944,25 @@ export class ExpeditionService {
         senderName: entry.senderName,
       });
       const relics = await store.listActiveRelics(entry.sessionId, entry.senderId);
-      const result = await this.settleEntry(store, points, entry, player, relics, world.bossName);
+      const casts = await store.listCastsForTarget({
+        sessionId: entry.sessionId,
+        dateKey: entry.dateKey,
+        targetId: entry.senderId,
+      });
+      const result = await this.settleEntry(
+        store,
+        points,
+        entry,
+        player,
+        relics,
+        casts,
+        randomEvents.filter((event) => (
+          event.targetSenderId === entry.senderId &&
+          event.targetEntryId === entry.id &&
+          event.targetEntryRevision === entry.revision
+        )),
+        world.bossName,
+      );
       results.push(result);
       totalPurification += result.report.purification;
     }
@@ -714,50 +1014,34 @@ export class ExpeditionService {
     entry: ExpeditionEntryRecord,
     player: ExpeditionPlayerRecord,
     relics: ExpeditionRelicRecord[],
+    casts: ExpeditionCastRecord[],
+    randomEvents: ExpeditionRandomEventRecord[],
     bossName: string,
   ): Promise<SettlementResult> {
-    const config = STRATEGY_CONFIG[entry.strategy];
-    const bonuses = collectBonuses(relics);
-    const advance = randomIntInclusive(config.advanceMin, config.advanceMax);
-    const targetDepth = player.currentDepth + advance + bonuses.diveBonus;
-    const boostSurvivalPenaltyBp = entry.boosted ? BOOST_SURVIVAL_PENALTY_BP : 0;
-    const boostMultiplierBonusBp = entry.boosted ? BOOST_MULTIPLIER_BONUS_BP : 0;
-    const survivalRateBp = clamp(
-      config.survivalBp
-        - targetDepth * 10
-        + bonuses.survivalBonusBp
-        - bonuses.curseSurvivalPenaltyBp
-        - boostSurvivalPenaltyBp,
-      500,
-      9500,
-    );
-    const survived = rollBasisPoints(survivalRateBp);
-    const multiplierBp = randomIntInclusive(config.multiplierMinBp, config.multiplierMaxBp)
-      + bonuses.multiplierBonusBp
-      + boostMultiplierBonusBp;
-    const rewardPoints = survived ? Math.floor(entry.stake * multiplierBp / 10000) : 0;
-    const basePurification = Math.floor(targetDepth * config.purificationMultiplierBp / 10000);
-    const finalPurification = Math.floor(basePurification * (10000 + bonuses.purificationBonusBp) / 10000);
-    const normalPurification = survived ? finalPurification : Math.floor(finalPurification * 0.3);
-    const specialEvent = targetDepth >= 30 && rollBasisPoints(500)
-      ? {
-          text: renderTemplate(sample(SPECIAL_EVENT_TEMPLATES), {
-            player: entry.senderName,
-            depth: targetDepth,
-            boss: bossName,
-          }),
-          purification: targetDepth * 3,
-        }
-      : undefined;
-    const purification = normalPurification + (specialEvent?.purification ?? 0);
-    const finalDepth = survived ? targetDepth : 0;
+    const castModifiers = buildCastModifiers(casts);
+    const randomEventModifiers = buildRandomEventModifiers(randomEvents);
+    const resolution = resolveExpeditionSettlement({
+      entry,
+      player,
+      relics,
+      extraModifiers: [
+        ...castModifiers,
+        ...randomEventModifiers,
+      ],
+      bossName,
+      random: {
+        randomIntInclusive,
+        rollBasisPoints,
+      },
+      renderSpecialEvent: (input) => renderTemplate(sample(SPECIAL_EVENT_TEMPLATES), input),
+    });
     let relic: ExpeditionRelicRecord | undefined;
 
-    if (survived) {
+    if (resolution.survived) {
       await points.earn({
         sessionId: entry.sessionId,
         senderId: entry.senderId,
-        amount: rewardPoints,
+        amount: resolution.rewardPoints,
         source: EXPEDITION_PLUGIN_ID,
         description: "远征生还奖励",
         operatorId: "system",
@@ -770,12 +1054,12 @@ export class ExpeditionService {
         },
       });
 
-      const dropRateBp = Math.min(
-        config.dropRateBp + targetDepth * 20 + bonuses.dropRateBonusBp,
-        9000,
-      );
-      if (rollBasisPoints(dropRateBp)) {
-        relic = await store.insertRelic(createRelic(entry, targetDepth, bonuses.qualityBonus));
+      if (resolution.relicDropped) {
+        relic = await store.insertRelic(createRelic(
+          entry,
+          resolution.targetDepth,
+          resolution.qualityBonus,
+        ));
       }
     } else {
       await store.deactivateActiveRelics(entry.sessionId, entry.senderId);
@@ -785,9 +1069,9 @@ export class ExpeditionService {
       sessionId: entry.sessionId,
       senderId: entry.senderId,
       senderName: entry.senderName,
-      survived,
-      finalDepth,
-      purification,
+      survived: resolution.survived,
+      finalDepth: resolution.finalDepth,
+      purification: resolution.purification,
     });
     await store.markEntrySettled(entry.id);
 
@@ -800,26 +1084,40 @@ export class ExpeditionService {
       senderName: entry.senderName,
       strategy: entry.strategy,
       stake: entry.stake,
-      outcome: survived ? "survived" : "dead",
+      outcome: resolution.survived ? "survived" : "dead",
       startDepth: player.currentDepth,
-      targetDepth,
-      finalDepth,
-      survivalRateBasisPoints: survivalRateBp,
-      multiplierBasisPoints: multiplierBp,
+      targetDepth: resolution.targetDepth,
+      finalDepth: resolution.finalDepth,
+      survivalRateBasisPoints: resolution.survivalRateBp,
+      multiplierBasisPoints: resolution.multiplierBp,
       boosted: entry.boosted,
       boostStake: entry.boostStake,
-      rewardPoints,
-      lostPoints: survived ? 0 : entry.stake,
-      purification,
-      deathReason: survived ? undefined : chooseDeathReason(entry, relics, targetDepth),
+      rewardPoints: resolution.rewardPoints,
+      lostPoints: resolution.survived ? 0 : entry.stake,
+      purification: resolution.purification,
+      deathReason: resolution.survived
+        ? undefined
+        : chooseDeathReason(entry, relics, resolution.targetDepth),
       relicName: relic?.name,
       relicRarity: relic?.rarity,
-      specialEventText: specialEvent?.text,
+      specialEventText: resolution.specialEvent?.text,
       details: {
-        advance,
+        advance: resolution.advance,
         relicCountBeforeSettlement: relics.length,
-        boostSurvivalPenaltyBp,
-        boostMultiplierBonusBp,
+        blessingCount: casts.filter((cast) => cast.castType === "blessing").length,
+        blessingSurvivalBpDelta: resolution.modifierSummary.bySource.blessing.survivalBpDelta,
+        jinxCount: casts.filter((cast) => cast.castType === "jinx").length,
+        jinxSurvivalBpDelta: resolution.modifierSummary.bySource.jinx.survivalBpDelta,
+        socialSurvivalBpDelta:
+          resolution.modifierSummary.bySource.blessing.survivalBpDelta +
+          resolution.modifierSummary.bySource.jinx.survivalBpDelta,
+        randomEventCount: randomEvents.length,
+        randomEventTitles: uniqueStrings(randomEvents.map((event) => event.title)),
+        modifierCount: resolution.modifierSummary.modifiers.length,
+        modifierTotals: modifierTotalsToDetails(resolution.modifierSummary.totals),
+        modifierSources: modifierSourcesToDetails(resolution.modifierSummary.bySource),
+        boostSurvivalPenaltyBp: resolution.boostSurvivalPenaltyBp,
+        boostMultiplierBonusBp: resolution.boostMultiplierBonusBp,
       },
       createdAt: new Date(),
     };
@@ -893,21 +1191,21 @@ function resolveStake(
   if (effectiveBalance < MIN_STAKE) {
     return {
       ok: false,
-      message: "你的积分不够。\n\n远征至少需要 10 积分。\n咪露用爪子把申请表推回来：\n“勇气满分，钱包零分喵。”",
+      message: insufficientPointsText(),
     };
   }
 
   if (stake < MIN_STAKE) {
     return {
       ok: false,
-      message: "投入太少。\n\n远征至少需要 10 积分。\n咪露用爪子敲了敲申请表：\n“这点押金连史莱姆都请不动喵。”",
+      message: stakeTooLowText(),
     };
   }
 
   if (stake > maxStake) {
     return {
       ok: false,
-      message: "投入过高。\n\n今日最多可投入当前积分的 80%。\n咪露啪地按住你的手：\n“不可以全押喵，破产冒险者会弄脏公会地板。”",
+      message: stakeTooHighText(),
     };
   }
 
@@ -925,34 +1223,52 @@ function samePlan(entry: ExpeditionEntryRecord, plan: ExpeditionEntryPlan): bool
   return entry.strategy === plan.strategy && entry.stake === plan.stake && entry.allIn === plan.allIn;
 }
 
-function collectBonuses(relics: ExpeditionRelicRecord[]): ExpeditionBonuses {
-  const raw = relics.reduce<ExpeditionBonuses>((acc, relic) => ({
-    survivalBonusBp: acc.survivalBonusBp + (relic.effectValue.survivalBonusBp ?? 0),
-    multiplierBonusBp: acc.multiplierBonusBp + (relic.effectValue.multiplierBonusBp ?? 0),
-    diveBonus: acc.diveBonus + (relic.effectValue.diveBonus ?? 0),
-    dropRateBonusBp: acc.dropRateBonusBp + (relic.effectValue.dropRateBonusBp ?? 0),
-    qualityBonus: acc.qualityBonus + (relic.effectValue.qualityBonus ?? 0),
-    purificationBonusBp: acc.purificationBonusBp + (relic.effectValue.purificationBonusBp ?? 0),
-    curseSurvivalPenaltyBp: acc.curseSurvivalPenaltyBp + (relic.effectValue.curseSurvivalPenaltyBp ?? 0),
-  }), {
-    survivalBonusBp: 0,
-    multiplierBonusBp: 0,
-    diveBonus: 0,
-    dropRateBonusBp: 0,
-    qualityBonus: 0,
-    purificationBonusBp: 0,
-    curseSurvivalPenaltyBp: 0,
+function buildCastModifiers(casts: ExpeditionCastRecord[]): ExpeditionModifier[] {
+  return casts.map((cast) => {
+    const value = randomIntInclusive(50, 200);
+    return {
+      source: cast.castType === "blessing" ? "blessing" : "jinx",
+      sourceId: String(cast.id),
+      label: `${cast.casterName}的${castTypeLabel(cast.castType)}`,
+      survivalBpDelta: cast.castType === "blessing" ? value : -value,
+    };
   });
+}
 
-  return {
-    survivalBonusBp: Math.min(raw.survivalBonusBp, 3000),
-    multiplierBonusBp: Math.min(raw.multiplierBonusBp, 30000),
-    diveBonus: Math.min(raw.diveBonus, 10),
-    dropRateBonusBp: Math.min(raw.dropRateBonusBp, 3000),
-    qualityBonus: Math.min(raw.qualityBonus, 120),
-    purificationBonusBp: Math.min(raw.purificationBonusBp, 20000),
-    curseSurvivalPenaltyBp: Math.min(raw.curseSurvivalPenaltyBp, 4000),
-  };
+function buildRandomEventModifiers(events: ExpeditionRandomEventRecord[]): ExpeditionModifier[] {
+  if (events.length === 0) {
+    return [];
+  }
+
+  const raw = events.reduce<Required<Omit<ExpeditionRandomEventEffectValue, "rewardPoints">>>(
+    (acc, event) => ({
+      advanceDelta: acc.advanceDelta + (event.effectValue.advanceDelta ?? 0),
+      survivalBpDelta: acc.survivalBpDelta + (event.effectValue.survivalBpDelta ?? 0),
+      multiplierBpDelta: acc.multiplierBpDelta + (event.effectValue.multiplierBpDelta ?? 0),
+      dropRateBpDelta: acc.dropRateBpDelta + (event.effectValue.dropRateBpDelta ?? 0),
+      qualityDelta: acc.qualityDelta + (event.effectValue.qualityDelta ?? 0),
+      purificationBpDelta: acc.purificationBpDelta + (event.effectValue.purificationBpDelta ?? 0),
+    }),
+    {
+      advanceDelta: 0,
+      survivalBpDelta: 0,
+      multiplierBpDelta: 0,
+      dropRateBpDelta: 0,
+      qualityDelta: 0,
+      purificationBpDelta: 0,
+    },
+  );
+
+  return [{
+    source: "random_event",
+    label: uniqueStrings(events.map((event) => event.title)).join("、") || "随机事件",
+    advanceDelta: clamp(raw.advanceDelta, -1, 2),
+    survivalBpDelta: clamp(raw.survivalBpDelta, -500, 500),
+    multiplierBpDelta: clamp(raw.multiplierBpDelta, -1000, 3000),
+    dropRateBpDelta: clamp(raw.dropRateBpDelta, -500, 1000),
+    qualityDelta: clamp(raw.qualityDelta, 0, 20),
+    purificationBpDelta: clamp(raw.purificationBpDelta, 0, 1000),
+  }];
 }
 
 function createRelic(
@@ -1065,6 +1381,30 @@ function buildAnnouncement(input: {
   const boostMoment = maxBy(boostedReports, (report) => (
     report.outcome === "survived" ? report.rewardPoints - report.stake : report.lostPoints
   ));
+  const jinxDead = maxBy(
+    input.reports.filter((report) => getReportDetailNumber(report, "jinxCount") > 0 && report.outcome === "dead"),
+    (report) => getReportDetailNumber(report, "jinxCount") * 100_000
+      + Math.abs(getReportDetailNumber(report, "jinxSurvivalBpDelta")) * 100
+      + report.lostPoints,
+  );
+  const jinxSurvivor = maxBy(
+    input.reports.filter((report) => getReportDetailNumber(report, "jinxCount") > 0 && report.outcome === "survived"),
+    (report) => getReportDetailNumber(report, "jinxCount") * 100_000
+      + Math.abs(getReportDetailNumber(report, "jinxSurvivalBpDelta")) * 100
+      + report.rewardPoints - report.stake,
+  );
+  const socialFocus = maxBy(
+    input.reports.filter((report) => (
+      getReportDetailNumber(report, "blessingCount") + getReportDetailNumber(report, "jinxCount")
+    ) > 0),
+    (report) => {
+      const blessingCount = getReportDetailNumber(report, "blessingCount");
+      const jinxCount = getReportDetailNumber(report, "jinxCount");
+      return (blessingCount + jinxCount) * 100_000
+        + Math.abs(getReportDetailNumber(report, "socialSurvivalBpDelta")) * 100
+        + randomIntInclusive(1, 99);
+    },
+  );
   const bestRelic = maxBy(input.relics, (relic) => rarityRank(relic.rarity));
   const specialEvents = input.reports.map((report) => report.specialEventText).filter(Boolean);
   const lines = [
@@ -1097,6 +1437,31 @@ function buildAnnouncement(input: {
     );
   }
 
+  if (jinxDead) {
+    lines.push(
+      "",
+      `今日毒奶现场：${jinxDead.senderName} 收到 ${getReportDetailNumber(jinxDead, "jinxCount")} 份毒奶后，在第 ${jinxDead.targetDepth} 层阵亡。`,
+      "咪露评价：大家的嘴真的很准喵。",
+    );
+  }
+
+  if (jinxSurvivor) {
+    lines.push(
+      "",
+      `毒奶反杀：${jinxSurvivor.senderName} 收到 ${getReportDetailNumber(jinxSurvivor, "jinxCount")} 份毒奶，结果${STRATEGY_LABELS[jinxSurvivor.strategy]}远征生还，带回 ${jinxSurvivor.rewardPoints} 积分。`,
+      "咪露评价：嘴硬赢了命运一次喵。",
+    );
+  }
+
+  if (socialFocus) {
+    lines.push(
+      "",
+      `今日公会焦点：${socialFocus.senderName} 出发前收到 ${getReportDetailNumber(socialFocus, "blessingCount") + getReportDetailNumber(socialFocus, "jinxCount")} 次围观施法。`,
+      `祝福 ${getReportDetailNumber(socialFocus, "blessingCount")}，毒奶 ${getReportDetailNumber(socialFocus, "jinxCount")}。`,
+      "咪露评价：这已经不是远征，这是公开处刑预约喵。",
+    );
+  }
+
   if (bestRelic) {
     lines.push("", `最佳遗物：${RARITY_LABELS[bestRelic.rarity]}遗物「${bestRelic.name}」。`);
   }
@@ -1114,11 +1479,7 @@ function buildAnnouncement(input: {
   if (input.bossDefeated) {
     lines.push(
       "",
-      "裂隙污染被彻底净化了。",
-      "",
-      `世界 Boss「${input.bossName}」在一阵不太体面的尖叫中消失。`,
-      `咪露把新的通缉令「${input.nextBossName}」钉上任务板：`,
-      "“恭喜各位喵。坏消息是，下一只更大。”",
+      bossDefeatedText(input.bossName, input.nextBossName),
     );
   }
 
@@ -1137,6 +1498,8 @@ function reportText(report: ExpeditionReportRecord): string {
       `收益倍率：x${formatMultiplierBp(report.multiplierBasisPoints)}`,
       `获得积分：${report.rewardPoints}`,
       report.relicName ? `获得遗物：${RARITY_LABELS[report.relicRarity ?? "common"]}遗物「${report.relicName}」` : undefined,
+      socialModifierText(report),
+      randomEventReportText(report),
       `裂隙净化：${report.purification}`,
       report.specialEventText,
     ].filter(Boolean).join("\n");
@@ -1152,65 +1515,387 @@ function reportText(report: ExpeditionReportRecord): string {
     `损失积分：${report.lostPoints}`,
     "本轮遗物：已清空",
     `死因：${report.deathReason}`,
+    socialModifierText(report),
+    randomEventReportText(report),
     `裂隙净化：${report.purification}`,
     report.specialEventText,
   ].filter(Boolean).join("\n");
 }
 
-function registeredText(entry: ExpeditionEntryRecord, balanceAfter: number, defaultCommand: boolean): string {
-  if (defaultCommand) {
-    return `报名成功。\n\n今日远征：${STRATEGY_LABELS[entry.strategy]}\n投入积分：${entry.stake}\n剩余积分：${balanceAfter}\n结算时间：${EXPEDITION_SETTLEMENT_CUTOFF}\n\n咪露把默认申请表盖上章：\n“先给你安排冒险档喵。下次想更刺激，可以试试「远征 疯狂 100」或者「远征 疯狂 梭哈」。”`;
+function socialModifierText(report: ExpeditionReportRecord): string | undefined {
+  const blessingCount = getReportDetailNumber(report, "blessingCount");
+  const jinxCount = getReportDetailNumber(report, "jinxCount");
+  if (blessingCount === 0 && jinxCount === 0) {
+    return undefined;
   }
 
-  return `报名成功。\n\n今日远征：${STRATEGY_LABELS[entry.strategy]}\n投入积分：${entry.stake}\n剩余积分：${balanceAfter}\n结算时间：${EXPEDITION_SETTLEMENT_CUTOFF}\n\n前台猫娘咪露把你的名字贴上任务板，尾巴轻轻一晃：\n“好耶，又有勇者主动交押金了喵。”`;
+  const blessingDelta = getReportDetailNumber(report, "blessingSurvivalBpDelta");
+  const jinxDelta = getReportDetailNumber(report, "jinxSurvivalBpDelta");
+  const socialDelta = getReportDetailNumber(report, "socialSurvivalBpDelta");
+  return [
+    `群友祝福：${blessingCount} 次，合计 ${formatSignedPercentBp(blessingDelta)} 生还率`,
+    `群友毒奶：${jinxCount} 次，合计 ${formatSignedPercentBp(jinxDelta)} 生还率`,
+    `社交净修正：${formatSignedPercentBp(socialDelta)}`,
+  ].join("\n");
+}
+
+function randomEventReportText(report: ExpeditionReportRecord): string | undefined {
+  const count = getReportDetailNumber(report, "randomEventCount");
+  if (count === 0) {
+    return undefined;
+  }
+
+  const titles = getReportDetailStringArray(report, "randomEventTitles");
+  return `随机事件：${titles.length > 0 ? titles.join("、") : `${count} 次临时修正`}`;
+}
+
+function registeredText(entry: ExpeditionEntryRecord, balanceAfter: number, defaultCommand: boolean): string {
+  const values = {
+    strategy: STRATEGY_LABELS[entry.strategy],
+    stake: entry.stake,
+    balance: balanceAfter,
+    settleTime: EXPEDITION_SETTLEMENT_CUTOFF,
+  };
+  if (defaultCommand) {
+    return appendCommandMenuHint(renderTemplate(sample([
+      "报名成功。\n\n今日远征：冒险\n投入积分：10\n剩余积分：{balance}\n结算时间：{settleTime}\n\n咪露把一张默认申请表塞进任务板：\n“先按冒险 10 积分给你登记啦。下次想更刺激，可以试试「远征 疯狂 100」或者「远征 疯狂 梭哈」喵。”",
+      "报名成功。\n\n今日远征：冒险\n投入积分：10\n剩余积分：{balance}\n结算时间：{settleTime}\n\n咪露替你勾了默认选项：\n“先来一份冒险 10 积分套餐喵。想把心跳拉满，下次可以试试「远征 疯狂 梭哈」。”",
+      "报名成功。\n\n今日远征：冒险\n投入积分：10\n剩余积分：{balance}\n结算时间：{settleTime}\n\n咪露把最薄的一张申请表推过来：\n“新手上路就先这样喵。等胆子长大了，再写「远征 疯狂 100」。”",
+    ]), values));
+  }
+
+  return appendCommandMenuHint(renderTemplate(sample([
+    "报名成功。\n\n今日远征：{strategy}\n投入积分：{stake}\n剩余积分：{balance}\n结算时间：{settleTime}\n\n前台猫娘咪露把你的名字贴上任务板，尾巴轻轻一晃：\n“好耶，又有勇者主动交押金了喵。”",
+    "报名成功。\n\n今日远征：{strategy}\n投入积分：{stake}\n剩余积分：{balance}\n结算时间：{settleTime}\n\n咪露把申请表夹进任务板：\n“押金收到喵。接下来请保持乐观，至少保持到结算前。”",
+    "报名成功。\n\n今日远征：{strategy}\n投入积分：{stake}\n剩余积分：{balance}\n结算时间：{settleTime}\n\n咪露晃了晃笔尖：\n“名字写上去了喵。现在后悔还来得及，但那样就不够好看了。”",
+    "报名成功。\n\n今日远征：{strategy}\n投入积分：{stake}\n剩余积分：{balance}\n结算时间：{settleTime}\n\n咪露笑眯眯地盖章：\n“又一位自愿走进裂隙的好心人，公会会记住你的押金喵。”",
+  ]), values));
 }
 
 function modifiedText(entry: ExpeditionEntryRecord, balanceAfter: number): string {
-  return `远征计划已修改。\n\n今日远征：${STRATEGY_LABELS[entry.strategy]}\n投入积分：${entry.stake}\n剩余积分：${balanceAfter}\n结算时间：${EXPEDITION_SETTLEMENT_CUTOFF}\n\n咪露盯着申请表，眼睛亮了起来：\n“改计划？哇，今天的事故报告有素材了喵。”`;
+  return renderTemplate(sample([
+    "远征计划已修改。\n\n今日远征：{strategy}\n投入积分：{stake}\n剩余积分：{balance}\n结算时间：{settleTime}\n\n咪露盯着申请表，眼睛亮了起来：\n“改计划？哇，今天的事故报告有素材了喵。”",
+    "远征计划已修改。\n\n今日远征：{strategy}\n投入积分：{stake}\n剩余积分：{balance}\n结算时间：{settleTime}\n\n咪露把旧申请表揉成团：\n“改好了喵。命运刚刚也跟着改了一下笑容。”",
+    "远征计划已修改。\n\n今日远征：{strategy}\n投入积分：{stake}\n剩余积分：{balance}\n结算时间：{settleTime}\n\n咪露重新盖章：\n“确认换这版喵？好，咪露最喜欢看人临时变勇敢。”",
+    "远征计划已修改。\n\n今日远征：{strategy}\n投入积分：{stake}\n剩余积分：{balance}\n结算时间：{settleTime}\n\n咪露低头核对金额：\n“策略改了，押金也改了。希望你的运气也跟着改好一点喵。”",
+  ]), {
+    strategy: STRATEGY_LABELS[entry.strategy],
+    stake: entry.stake,
+    balance: balanceAfter,
+    settleTime: EXPEDITION_SETTLEMENT_CUTOFF,
+  });
 }
 
 function unchangedText(entry: ExpeditionEntryRecord, balanceAfter: number): string {
-  return `你的远征计划没有变化。\n\n今日远征：${STRATEGY_LABELS[entry.strategy]}\n投入积分：${entry.stake}\n剩余积分：${balanceAfter}\n结算时间：${EXPEDITION_SETTLEMENT_CUTOFF}\n\n咪露用爪子点了点任务板：\n“同一张申请表不用交两遍喵，我还没这么健忘。”`;
+  return renderTemplate(sample([
+    "你的远征计划没有变化。\n\n今日远征：{strategy}\n投入积分：{stake}\n剩余积分：{balance}\n结算时间：{settleTime}\n\n咪露用爪子点了点任务板：\n“同一张申请表不用交两遍喵，我还没这么健忘。”",
+    "你的远征计划没有变化。\n\n今日远征：{strategy}\n投入积分：{stake}\n剩余积分：{balance}\n结算时间：{settleTime}\n\n咪露把申请表转回来：\n“一模一样喵。你是在确认自己真的这么勇吗？”",
+    "你的远征计划没有变化。\n\n今日远征：{strategy}\n投入积分：{stake}\n剩余积分：{balance}\n结算时间：{settleTime}\n\n咪露戳了戳登记簿：\n“已经登记过啦。重复念咒不会让生还率偷偷上涨喵。”",
+  ]), {
+    strategy: STRATEGY_LABELS[entry.strategy],
+    stake: entry.stake,
+    balance: balanceAfter,
+    settleTime: EXPEDITION_SETTLEMENT_CUTOFF,
+  });
 }
 
 function boostedText(boostStake: number, totalStake: number, balanceAfter: number): string {
-  return `加码成功。\n\n追加投入：${boostStake}\n当前总投入：${totalStake}\n剩余积分：${balanceAfter}\n最终倍率 +0.5\n生还率 -10%\n\n咪露把爪印盖在申请表上：\n“好耶，理智又少了一点喵。”`;
+  return renderTemplate(sample([
+    "加码成功。\n\n追加投入：{extraStake}\n当前总投入：{totalStake}\n剩余积分：{balance}\n最终倍率 +0.5\n生还率 -10%\n\n咪露把爪印盖在申请表上：\n“好耶，理智又少了一点喵。”",
+    "加码成功。\n\n追加投入：{extraStake}\n当前总投入：{totalStake}\n剩余积分：{balance}\n最终倍率 +0.5\n生还率 -10%\n\n咪露把爪印盖得特别响：\n“漂亮喵，理智刚刚从窗户跳出去了。”",
+    "加码成功。\n\n追加投入：{extraStake}\n当前总投入：{totalStake}\n剩余积分：{balance}\n最终倍率 +0.5\n生还率 -10%\n\n咪露眯起眼睛：\n“这一下很有勇者味喵，也很有事故味。”",
+    "加码成功。\n\n追加投入：{extraStake}\n当前总投入：{totalStake}\n剩余积分：{balance}\n最终倍率 +0.5\n生还率 -10%\n\n咪露把登记簿推回去：\n“签好了喵。现在你和裂隙之间，多了一点金钱纠纷。”",
+    "加码成功。\n\n追加投入：{extraStake}\n当前总投入：{totalStake}\n剩余积分：{balance}\n最终倍率 +0.5\n生还率 -10%\n\n咪露尾巴晃得很快：\n“好耶，临门一爪成功。接下来就看命运咬哪边了喵。”",
+  ]), {
+    extraStake: boostStake,
+    totalStake,
+    balance: balanceAfter,
+  });
 }
 
 function boostInsufficientText(): string {
-  return "加码失败，剩余积分不足。\n\n至少需要 10 积分才能加码。\n咪露看了看你的钱包：\n“想法很大，余额很小喵。”";
+  return sample([
+    "加码失败，剩余积分不足。\n\n至少需要 10 积分才能加码。\n咪露看了看你的钱包：\n“想法很大，余额很小喵。”",
+    "加码失败，剩余积分不足。\n\n至少需要 10 积分才能加码。\n咪露轻轻合上账本：\n“不是咪露小气喵，是你的钱包先认输了。”",
+    "加码失败，剩余积分不足。\n\n至少需要 10 积分才能加码。\n咪露看着余额沉默了一下：\n“这点积分就别硬装大户了喵，怪心疼的。”",
+  ]);
 }
 
 function alreadyBoostedText(): string {
-  return "今天已经加码过了。\n\n咪露把爪子收回去：\n“一天只能上头一次喵，公会也怕你太努力。”";
+  return sample([
+    "今天已经加码过了。\n\n咪露把爪子收回去：\n“一天只能上头一次喵，公会也怕你太努力。”",
+    "今天已经加码过了。\n\n咪露把爪印章举远：\n“再盖就不是加码了喵，是把申请表剁碎。”",
+    "今天已经加码过了。\n\n咪露按住你的手：\n“一次就够刺激了喵。再来一次，公会要给你开专门病房。”",
+  ]);
 }
 
 function notRegisteredBoostText(): string {
-  return "你还没有报名远征，不能加码。\n\n咪露晃了晃空白申请表：\n“连车都没上，就想把油门踩到底喵？”";
+  return sample([
+    "你还没有报名远征，不能加码。\n\n咪露晃了晃空白申请表：\n“连车都没上，就想把油门踩到底喵？”",
+    "你还没有报名远征，不能加码。\n\n咪露歪头：\n“你连坑都没进，就开始嫌坑不够深喵？”",
+    "你还没有报名远征，不能加码。\n\n咪露晃了晃空白名单：\n“先发送「远征」上车喵。站在站台上踩油门没有用。”",
+  ]);
 }
 
 function nonBoostTimeText(): string {
-  return `现在还不能加码。\n\n临门一爪开放时间：${BOOST_WINDOW_START} - 17:49\n咪露舔了舔爪子：\n“别急喵，真正上头的时间还没到。”`;
+  return sample([
+    `现在还不能加码。\n\n临门一爪开放时间：${BOOST_WINDOW_START} - 17:49\n咪露舔了舔爪子：\n“别急喵，真正上头的时间还没到。”`,
+    `现在还不能加码。\n\n临门一爪开放时间：${BOOST_WINDOW_START} - 17:49\n咪露把小铃铛扣住：\n“铃还没响喵。别急，等会儿有的是机会上头。”`,
+    `现在还不能加码。\n\n临门一爪开放时间：${BOOST_WINDOW_START} - 17:49\n咪露舔了舔爪印章：\n“真正危险的柜台服务还没开始喵。”`,
+  ]);
 }
 
 function lockedModifyText(): string {
-  return "今日远征已经锁定，无法修改。\n\n咪露把加码申请表压在爪子下面：\n“爪印都盖上去了喵，现在反悔会显得你很清醒。”";
+  return sample([
+    "今日远征已经锁定，无法修改。\n\n咪露看了看申请表上的爪印：\n“爪印都盖好了喵，现在改会把纸撕破。”",
+    "今日远征已经锁定，无法修改。\n\n咪露把加码申请表压在爪子下面：\n“爪印都盖上去了喵，现在反悔会显得你很清醒。”",
+    "今日远征已经锁定，无法修改。\n\n咪露把申请表塞进铁盒：\n“锁都咔哒一声了喵，现在只能祈祷，不支持改命。”",
+    "今日远征已经锁定，无法修改。\n\n咪露竖起一根爪子：\n“刚才让你想清楚，现在轮到命运想清楚你了喵。”",
+  ]);
 }
 
 function lockedCancelText(): string {
-  return "今日远征已经锁定，无法取消。\n\n咪露把登记簿抱紧：\n“都临门一爪了喵，现在逃跑就没有节目效果了。”";
+  return sample([
+    "今日远征已经锁定，无法取消。\n\n咪露把登记簿抱紧：\n“名单已经锁柜子里了喵，钥匙咪露吞掉了。”",
+    "今日远征已经锁定，无法取消。\n\n咪露把登记簿抱紧：\n“都临门一爪了喵，现在逃跑就没有节目效果了。”",
+    "今日远征已经锁定，无法取消。\n\n咪露把取消章藏进抽屉：\n“这枚章现在下班了喵。你也快了。”",
+    "今日远征已经锁定，无法取消。\n\n咪露笑眯眯地摇头：\n“名单进锅了喵，现在开盖会影响口感。”",
+  ]);
 }
 
 function settlementRunningText(): string {
-  return "今日远征正在结算中。\n\n咪露正飞快翻着登记簿：\n“再催就把你的战报揉成团喵，反正还没盖章。”";
+  return sample([
+    "今日远征正在结算中。\n\n咪露正飞快翻着登记簿：\n“再催就把你的战报揉成团喵，反正还没盖章。”",
+    "今日远征正在结算中。\n\n咪露抱着一叠战报跑过柜台：\n“别催喵，催急了就按最惨的那版发。”",
+    "今日远征正在结算中。\n\n咪露的笔尖飞快乱晃：\n“正在算喵。有人赚钱，有人变成教材。”",
+  ]);
 }
 
 function closedText(): string {
-  return "今日裂隙已经关闭，远征队正在公会大厅休整。\n明天再来吧。\n\n咪露抱着登记簿，尾巴慢悠悠地晃：\n“现在申请也没用喵。不如先在群里发「图来」看看？”";
+  return sample([
+    "今日裂隙已经关闭，远征队正在公会大厅休整。\n明天再来吧。\n\n咪露抱着登记簿，尾巴慢悠悠地晃：\n“现在申请也没用喵。不如先在群里发「图来」看看？”",
+    "今日裂隙已经关闭，远征队正在公会大厅休整。\n明天再来吧。\n\n咪露把门牌翻到“打烊”：\n“现在报名太晚啦喵。去群里发「图来」，酒馆老板可能会理你。”",
+    "今日裂隙已经关闭，远征队正在公会大厅休整。\n明天再来吧。\n\n咪露抱着热茶缩在柜台后面：\n“下班后的裂隙不接客喵。你也去酒馆休息，顺便试试「图来」。”",
+  ]);
 }
 
 function formatErrorText(): string {
-  return "格式不太对。\n\n试试：\n远征 冒险 50\n远征 疯狂 梭哈\n\n咪露歪着头看了半天：\n“这张申请表像被史莱姆嚼过又吐出来了喵。”";
+  return sample([
+    "格式不太对。\n\n试试：\n远征 冒险 50\n远征 疯狂 梭哈\n\n咪露歪着头看了半天：\n“这张申请表像被史莱姆嚼过又吐出来了喵。”",
+    "格式不太对。\n\n试试：\n远征 冒险 50\n远征 疯狂 梭哈\n\n咪露把申请表倒过来看：\n“嗯，倒过来也还是不对喵。”",
+    "格式不太对。\n\n试试：\n远征 冒险 50\n远征 疯狂 梭哈\n\n咪露递来一支笔：\n“重新写喵。这张申请表已经开始自己喊救命了。”",
+  ]);
+}
+
+function insufficientPointsText(): string {
+  return sample([
+    "你的积分不够。\n\n远征至少需要 10 积分。\n咪露用爪子把申请表推回来：\n“勇气满分，钱包零分喵。”",
+    "你的积分不够。\n\n远征至少需要 10 积分。\n咪露把申请表压在爪子下面：\n“钱包太轻喵，裂隙入口的风会把你吹回来。”",
+    "你的积分不够。\n\n远征至少需要 10 积分。\n咪露看了看账本：\n“勇气已经到账，积分还在路上喵。”",
+  ]);
+}
+
+function stakeTooLowText(): string {
+  return sample([
+    "投入太少。\n\n远征至少需要 10 积分。\n咪露用爪子敲了敲申请表：\n“这点押金连史莱姆都请不动喵。”",
+    "投入太少。\n\n远征至少需要 10 积分。\n咪露认真摇头：\n“低于 10 积分，连公会的倒霉祝福都启动不了喵。”",
+    "投入太少。\n\n远征至少需要 10 积分。\n咪露把硬币推回来：\n“这点不叫押金喵，这叫给裂隙的小费。”",
+  ]);
+}
+
+function stakeTooHighText(): string {
+  return sample([
+    "投入过高。\n\n报名最多可投入当前积分的 80%。\n咪露啪地按住你的手：\n“不可以全押喵，破产冒险者会弄脏公会地板。”",
+    "投入过高。\n\n报名最多可投入当前积分的 80%。\n咪露扣住登记簿：\n“不许现在就把钱包掏空喵，公会还想明天继续坑你。”",
+    "投入过高。\n\n报名最多可投入当前积分的 80%。\n咪露把超出的部分拍回去：\n“太贪心会被裂隙闻到喵。先留点命和积分。”",
+  ]);
+}
+
+function cancelledText(balance: number): string {
+  return renderTemplate(sample([
+    "已取消今日远征，投入积分已返还。\n当前积分：{balance}\n\n咪露把任务牌塞回抽屉，懒洋洋地打了个哈欠：\n“逃跑也算战术喵。虽然一点都不帅。”",
+    "已取消今日远征，投入积分已返还。\n当前积分：{balance}\n\n咪露把你的名牌摘下来：\n“很好喵，今天选择活着下班。虽然没什么戏剧性。”",
+    "已取消今日远征，投入积分已返还。\n当前积分：{balance}\n\n咪露收回申请表：\n“撤退成功喵。放心，裂隙不会伤心，它明天还会等你。”",
+  ]), { balance });
+}
+
+function notRegisteredCancelText(): string {
+  return sample([
+    "你今天还没有报名远征。\n\n咪露看着空空的登记簿，尾巴晃了一下：\n“你还没出发就想取消，预判得很熟练喵。”",
+    "你今天还没有报名远征。\n\n咪露翻到空白页：\n“还没上车就喊停车喵，你的安全意识领先大家一整天。”",
+    "你今天还没有报名远征。\n\n咪露把取消章举起来又放下：\n“没有可以取消的东西喵。要不先发送「远征」制造一点？”",
+  ]);
+}
+
+function noReportText(): string {
+  return sample([
+    "今天没有你的远征记录。\n\n咪露翻了翻登记簿，露出甜甜的笑：\n“你今天明明没出门喵，不可以假装自己刚拯救世界。”",
+    "今天没有你的远征记录。\n\n咪露把登记簿翻给你看：\n“空的喵。你今天的冒险主要发生在想象里。”",
+    "今天没有你的远征记录。\n\n咪露眨了眨眼：\n“没有报名就没有战报喵。公会不提供梦游结算。”",
+    "今天没有你的远征记录。\n\n咪露把笔夹到耳朵后面：\n“想看战报的话，先发送「远征」制造一点危险喵。”",
+  ]);
+}
+
+function reportPendingText(): string {
+  return sample([
+    `今日远征尚未结算。\n\n结算时间：${EXPEDITION_SETTLEMENT_CUTOFF}\n咪露趴在柜台上看钟：\n“急什么喵？再催的话，咪露就把你的战报压到最下面。”`,
+    `今日远征尚未结算。\n\n结算时间：${EXPEDITION_SETTLEMENT_CUTOFF}\n咪露趴在登记簿上：\n“还没到点喵。现在偷看战报，就像偷看还没煮熟的汤。”`,
+    `今日远征尚未结算。\n\n结算时间：${EXPEDITION_SETTLEMENT_CUTOFF}\n咪露晃了晃尾巴：\n“战报还在路上喵，可能走着走着就摔了。”`,
+    `今日远征尚未结算。\n\n结算时间：${EXPEDITION_SETTLEMENT_CUTOFF}\n咪露用爪子压住纸页：\n“急什么喵，命运正在慢慢写错别字。”`,
+  ]);
+}
+
+function noRelicText(): string {
+  return sample([
+    "你当前没有遗物。\n\n咪露递来一个空盒子，认真地点点头：\n“给，至少看起来像你有战利品了喵。”",
+    "你当前没有遗物。\n\n咪露往盒子里吹了口气：\n“现在里面装的是空气喵。品质还挺纯。”",
+    "你当前没有遗物。\n\n咪露递来一个标签：\n“可以先贴上‘未来会有’喵，听起来比较体面。”",
+    "你当前没有遗物。\n\n咪露看了看你的背包：\n“干净得像刚被裂隙洗劫过喵。”",
+  ]);
+}
+
+function emptyRankingText(): string {
+  return sample([
+    "当前还没有人站上远征排行。\n\n咪露擦了擦空白榜单：\n“今天大家都好谨慎喵，真无聊。”",
+    "当前还没有人站上远征排行。\n\n咪露把榜单挂正：\n“榜上没人喵。今天的勇气都在排队观望。”",
+    "当前还没有人站上远征排行。\n\n咪露敲了敲空榜：\n“这么大一张榜，居然没人来丢脸喵。”",
+    "当前还没有人站上远征排行。\n\n咪露托着脸：\n“没有幸存者，也没有传奇，只有一块很寂寞的木板喵。”",
+  ]);
+}
+
+function expeditionCommandMenuText(): string {
+  return [
+    "远征指令菜单。",
+    "",
+    "咪露把公会菜单牌往柜台上一拍：",
+    "“想进裂隙、想看热闹、想给别人添乱，都从这里开始喵。”",
+    "",
+    "以下是当前版本支持的全部游戏指令，部分指令会受时间和报名状态限制。",
+    "",
+    "报名与调整：",
+    "远征",
+    "远征 稳健 20",
+    "远征 冒险 50",
+    "远征 疯狂 100",
+    "远征 梭哈",
+    "远征 稳健 梭哈",
+    "远征 冒险 梭哈",
+    "远征 疯狂 梭哈",
+    "取消远征",
+    "",
+    "临门一爪：",
+    "加码",
+    "",
+    "围观与添乱：",
+    "祝福 @玩家",
+    "毒奶 @玩家",
+    "我的施法",
+    "",
+    "查询：",
+    "我的战报",
+    "我的遗物",
+    "远征排行",
+    "远征指令",
+  ].join("\n");
+}
+
+function appendCommandMenuHint(text: string): string {
+  return `${text}\n\n发送「远征指令」可以查看完整菜单。`;
+}
+
+function bossDefeatedText(boss: string, nextBoss: string): string {
+  return renderTemplate(sample([
+    "裂隙污染被彻底净化了。\n\n世界 Boss「{boss}」在一阵不太体面的尖叫中消失。\n咪露把新的通缉令「{nextBoss}」钉上任务板：\n“恭喜各位喵。坏消息是，下一只更大。”",
+    "裂隙污染被彻底净化了。\n\n世界 Boss「{boss}」的名字从通缉令上慢慢褪色。\n咪露把旧纸揉成团：\n“干得漂亮喵。现在可以开始担心下一张通缉令了。”",
+    "裂隙污染被彻底净化了。\n\n世界 Boss「{boss}」被净化成一阵很没面子的烟。\n咪露踮脚看了看远方：\n“胜利啦喵。趁新的麻烦还没排队进门，先鼓掌。”",
+    "裂隙污染被彻底净化了。\n\n世界 Boss「{boss}」终于停止往公会账本上泼黑泥。\n咪露把账本擦干净：\n“好消息是它没了。坏消息是账还在喵。”",
+    "裂隙污染被彻底净化了。\n\n世界 Boss「{boss}」倒下时，裂隙深处传来一声很不甘心的咕噜。\n咪露把爪印盖在通缉令上：\n“本轮收工喵。大家的倒霉很有用。”",
+  ]), { boss, nextBoss });
+}
+
+function castSuccessText(cast: ExpeditionCastRecord, remainingCasts: number): string {
+  if (cast.castType === "blessing") {
+    return sample([
+      `祝福已登记。\n\n目标：${cast.targetName}\n今日剩余施法名额：${remainingCasts}\n\n咪露在${cast.targetName}的申请表旁边贴了一枚小小的亮片：\n“祝福收到了喵。至于命运收不收，要等 17:50 才知道。”`,
+      `祝福已登记。\n\n目标：${cast.targetName}\n今日剩余施法名额：${remainingCasts}\n\n咪露贴上一枚亮晶晶的小星星：\n“祝福投递成功喵。希望它路上别被裂隙吃掉。”`,
+      `祝福已登记。\n\n目标：${cast.targetName}\n今日剩余施法名额：${remainingCasts}\n\n咪露认真盖章：\n“收到喵。你给的是祝福，命运回什么就不一定了。”`,
+    ]);
+  }
+
+  return sample([
+    `毒奶已登记。\n\n目标：${cast.targetName}\n今日剩余施法名额：${remainingCasts}\n\n咪露笑眯眯地在登记簿上画了个黑色小爪印：\n“好耶，又有人对朋友的运气下手了喵。”`,
+    `毒奶已登记。\n\n目标：${cast.targetName}\n今日剩余施法名额：${remainingCasts}\n\n咪露画了个黑色小爱心：\n“坏坏的关心收到了喵，友情真是可怕。”`,
+    `毒奶已登记。\n\n目标：${cast.targetName}\n今日剩余施法名额：${remainingCasts}\n\n咪露捂嘴偷笑：\n“你们群友之间的祝愿，怎么有一股陷阱味喵。”`,
+  ]);
+}
+
+function castModifiedText(cast: ExpeditionCastRecord): string {
+  if (cast.castType === "blessing") {
+    return sample([
+      `施法已修改。\n\n目标：${cast.targetName}\n当前施法：祝福\n\n咪露把黑爪印擦掉，换上亮片：\n“突然变善良了喵？咪露先记下，等会儿看有没有反转。”`,
+      `施法已修改。\n\n目标：${cast.targetName}\n当前施法：祝福\n\n咪露重新贴好亮片：\n“改成祝福了喵。友情临时回暖，命运正在旁听。”`,
+    ]);
+  }
+
+  return sample([
+    `施法已修改。\n\n目标：${cast.targetName}\n当前施法：毒奶\n\n咪露把刚贴上的祝福亮片抠下来，换成黑色小爪印：\n“刚才还祝福，现在就毒奶。你们人类的友情真好看喵。”`,
+    `施法已修改。\n\n目标：${cast.targetName}\n当前施法：毒奶\n\n咪露把亮片撕下来：\n“好快的变脸喵。刚才是朋友，现在是节目效果。”`,
+  ]);
+}
+
+function castTargetMissingText(castType: ExpeditionCastType): string {
+  return `请指定要${castTypeLabel(castType)}的玩家。\n\n试试：${castTypeLabel(castType)} @玩家\n咪露举起小法杖：\n“要有收件人喵，不然命运不知道该砸谁。”`;
+}
+
+function castTargetNotRegisteredText(): string {
+  return sample([
+    "不能施法，目标今天还没有报名远征。\n\n咪露翻了翻登记簿：\n“这个人今天没上车喵。你想毒奶空气吗？”",
+    "不能施法，目标今天还没有报名远征。\n\n咪露翻完名单：\n“人都没在车上喵，你这口奶喷到公会墙上了。”",
+    "不能施法，目标今天还没有报名远征。\n\n咪露敲了敲空白栏：\n“先让对方发送「远征」喵。不然命运找不到收件人。”",
+  ]);
+}
+
+function castSelfText(): string {
+  return sample([
+    "不能对自己施法。\n\n咪露按住你的手：\n“自己奶自己不算喵，这叫心理建设。”",
+    "不能对自己施法。\n\n咪露把你的手推开：\n“自己给自己加戏不算施法喵，最多算热身。”",
+    "不能对自己施法。\n\n咪露眯起眼睛：\n“想自助祝福喵？公会暂时不支持这种过于方便的服务。”",
+  ]);
+}
+
+function castLimitText(): string {
+  return sample([
+    "今天的施法名额已经用完。\n\n每人每天最多 3 次。\n咪露把你的小法杖收走：\n“今天已经做法 3 次啦。再念下去，公会地板要冒烟了喵。”",
+    "今天的施法名额已经用完。\n\n每人每天最多 3 次。\n咪露把记录本合上：\n“嘴巴今天业绩达标了喵，剩下的交给别人添乱。”",
+    "今天的施法名额已经用完。\n\n每人每天最多 3 次。\n咪露收走小法杖：\n“不许再念了喵，再念命运都要拉黑你。”",
+  ]);
+}
+
+function castClosedText(): string {
+  return sample([
+    "今日远征已经关闭，不能再祝福或毒奶。\n\n咪露抱着已经锁好的登记簿：\n“现在才想动嘴喵？命运已经开始点名了。”",
+    "今日远征已经关闭，不能再祝福或毒奶。\n\n咪露把登记簿锁进柜子：\n“现在说什么都晚啦喵，命运已经开始翻牌。”",
+    "今日远征已经关闭，不能再祝福或毒奶。\n\n咪露竖起尾巴：\n“嘴慢一步喵。下次记得在 17:50 前开口。”",
+  ]);
+}
+
+function myCastsText(casts: ExpeditionCastRecord[]): string {
+  const castList = casts
+    .map((cast, index) => `${index + 1}. ${castTypeLabel(cast.castType)} ${cast.targetName}`)
+    .join("\n");
+
+  return sample([
+    `今日施法记录：\n${castList}\n\n咪露翻了翻记录：\n“今日发言证据都在这里喵，想赖账也没用。”`,
+    `今日施法记录：\n${castList}\n\n咪露一条条念完：\n“嗯，很精彩喵。你的嘴今天没有白上班。”`,
+  ]);
+}
+
+function myCastsEmptyText(): string {
+  return sample([
+    "今天还没有施法记录。\n\n咪露把空白小本子递过来：\n“还没祝福，也还没毒奶喵。你的嘴今天很安静。”",
+    "今天还没有施法记录。\n\n咪露递来一张空白便签：\n“还没人被你祝福，也还没人被你毒奶。今天的命运少了一点噪音喵。”",
+    "今天还没有施法记录。\n\n咪露晃了晃小法杖：\n“安静得不像你喵。发送「祝福 @玩家」或者「毒奶 @玩家」试试？”",
+  ]);
 }
 
 function ledgerKey(entry: ExpeditionEntryRecord, action: string): string {
@@ -1225,12 +1910,86 @@ function boostReminderOperationKey(dateKey: string): string {
   return `boost-reminder:${dateKey}`;
 }
 
+function randomEventOperationKey(dateKey: string, slotKey: string): string {
+  return `random-event:${dateKey}:${slotKey}`;
+}
+
+function randomEventPlanKey(dateKey: string): string {
+  return `random-event-plan:${dateKey}`;
+}
+
 function isWithinBoostWindow(input: Date): boolean {
   const dateKey = getBusinessDateKey(input, EXPEDITION_TIMEZONE);
   const boostStartAt = getDailyCutoffAt(dateKey, BOOST_WINDOW_START, EXPEDITION_TIMEZONE);
   const settlementAt = getDailyCutoffAt(dateKey, EXPEDITION_SETTLEMENT_CUTOFF, EXPEDITION_TIMEZONE);
   const time = input.getTime();
   return time >= boostStartAt.getTime() && time < settlementAt.getTime();
+}
+
+function isWithinRandomEventWindow(input: Date): boolean {
+  const dateKey = getBusinessDateKey(input, EXPEDITION_TIMEZONE);
+  const windowStartAt = getDailyCutoffAt(dateKey, RANDOM_EVENT_WINDOW_START, EXPEDITION_TIMEZONE);
+  const windowEndAt = getDailyCutoffAt(dateKey, RANDOM_EVENT_WINDOW_END, EXPEDITION_TIMEZONE);
+  const boostStartAt = getDailyCutoffAt(dateKey, BOOST_WINDOW_START, EXPEDITION_TIMEZONE);
+  const settlementAt = getDailyCutoffAt(dateKey, EXPEDITION_SETTLEMENT_CUTOFF, EXPEDITION_TIMEZONE);
+  const time = input.getTime();
+  return (
+    time >= windowStartAt.getTime() &&
+    time <= windowEndAt.getTime() &&
+    !(time >= boostStartAt.getTime() && time < settlementAt.getTime())
+  );
+}
+
+function getLocalTimeKey(input: Date, timezone: string): string {
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone: timezone,
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).format(input);
+}
+
+function pickRandomEventSlots(): string[] {
+  const candidates = buildRandomEventSlotCandidates();
+  const count = randomIntInclusive(1, 2);
+  const slots = new Set<string>();
+  while (slots.size < count && slots.size < candidates.length) {
+    slots.add(sample(candidates));
+  }
+
+  return [...slots].sort();
+}
+
+function buildRandomEventSlotCandidates(): string[] {
+  const result: string[] = [];
+  const startMinutes = toMinutes(RANDOM_EVENT_WINDOW_START);
+  const endMinutes = toMinutes(RANDOM_EVENT_WINDOW_END);
+  for (
+    let minutes = startMinutes;
+    minutes <= endMinutes;
+    minutes += RANDOM_EVENT_SLOT_INTERVAL_MINUTES
+  ) {
+    const hour = Math.floor(minutes / 60).toString().padStart(2, "0");
+    const minute = (minutes % 60).toString().padStart(2, "0");
+    result.push(`${hour}:${minute}`);
+  }
+
+  return result;
+}
+
+function toMinutes(value: string): number {
+  const [hour, minute] = value.split(":").map((part) => Number.parseInt(part, 10));
+  return (hour ?? 0) * 60 + (minute ?? 0);
+}
+
+function previousDateKey(dateKey: string): string {
+  const date = new Date(`${dateKey}T00:00:00+08:00`);
+  date.setUTCDate(date.getUTCDate() - 1);
+  return date.toISOString().slice(0, 10);
+}
+
+function resolveMentionTarget(context: PluginContext): string | undefined {
+  return context.message.mentionedWxids.find((wxid) => wxid !== context.message.senderId);
 }
 
 function rollBasisPoints(threshold: number): boolean {
@@ -1248,6 +2007,14 @@ function sample<T>(items: readonly T[]): T {
 function sampleDifferent(items: readonly string[], current: string): string {
   const candidates = items.filter((item) => item !== current);
   return sample(candidates.length > 0 ? candidates : items);
+}
+
+function castTypeLabel(castType: ExpeditionCastType): string {
+  return castType === "blessing" ? "祝福" : "毒奶";
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values.filter(Boolean))];
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -1271,8 +2038,36 @@ function rarityRank(rarity: ExpeditionRelicRarity): number {
   return 1;
 }
 
+function getReportDetailNumber(report: ExpeditionReportRecord, key: string): number {
+  const details = report.details;
+  if (!details || typeof details !== "object" || Array.isArray(details)) {
+    return 0;
+  }
+
+  const value = details[key];
+  return typeof value === "number" ? value : 0;
+}
+
+function getReportDetailStringArray(report: ExpeditionReportRecord, key: string): string[] {
+  const details = report.details;
+  if (!details || typeof details !== "object" || Array.isArray(details)) {
+    return [];
+  }
+
+  const value = details[key];
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.filter((item): item is string => typeof item === "string");
+}
+
 function formatPercentBp(value: number): string {
   return `${(value / 100).toFixed(2).replace(/\.00$/, "")}%`;
+}
+
+function formatSignedPercentBp(value: number): string {
+  return `${value >= 0 ? "+" : "-"}${formatPercentBp(Math.abs(value))}`;
 }
 
 function formatMultiplierBp(value: number): string {

@@ -106,6 +106,7 @@ export interface NormalizedMessage {
   isSelfSent: boolean;
   isFromBot: boolean;
   isMentionBot: boolean;
+  mentionedWxids: string[];
   fingerprint: string;
 }
 

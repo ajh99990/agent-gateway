@@ -151,6 +151,7 @@ export function normalizeWeFlowApiMessage(
     isSelfSent,
     isFromBot,
     isMentionBot: detectMention(content, botProfile),
+    mentionedWxids: [],
     fingerprint: `${sessionId}:${message.localId}`,
   };
 }

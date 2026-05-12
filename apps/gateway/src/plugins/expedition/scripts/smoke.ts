@@ -7,8 +7,10 @@ import {
   PostgresStore,
 } from "../../../db/index.js";
 import {
+  expeditionCasts,
   expeditionEntries,
   expeditionPlayers,
+  expeditionRandomEvents,
   expeditionRelics,
   expeditionReports,
   expeditionWorlds,
@@ -102,16 +104,24 @@ async function main(): Promise<void> {
     if (!findCommand(expedition, "远征 疯狂 梭哈")) {
       throw new Error("远征插件未匹配带参数远征指令");
     }
+    if (!findCommand(expedition, "远征指令")) {
+      throw new Error("远征插件未匹配远征指令菜单");
+    }
     if (!findCommand(expedition, "加码")) {
       throw new Error("远征插件未匹配加码指令");
     }
-    if (expedition.scheduledJobs?.length !== 2) {
-      throw new Error("远征插件应注册 2 个每日定时任务");
+    if (expedition.scheduledJobs?.length !== 3) {
+      throw new Error("远征插件应注册 3 个每日定时任务");
     }
 
     await seedPoints(points, dateKey);
     const boostTimestampMs = Date.parse(`${dateKey}T09:45:00.000Z`);
 
+    await runCommand(expedition, services, {
+      content: "远征指令",
+      userIndex: 0,
+      messageTimestampMs,
+    });
     await runCommand(expedition, services, {
       content: "远征 冒险 50",
       userIndex: 0,
@@ -125,6 +135,29 @@ async function main(): Promise<void> {
     await runCommand(expedition, services, {
       content: "远征 疯狂 梭哈",
       userIndex: 1,
+      messageTimestampMs,
+    });
+    await runCommand(expedition, services, {
+      content: "祝福 @烟测阿光",
+      userIndex: 2,
+      messageTimestampMs,
+      mentionedWxids: [SMOKE_USERS[0]!.senderId],
+    });
+    await runCommand(expedition, services, {
+      content: "毒奶 @烟测小林",
+      userIndex: 2,
+      messageTimestampMs,
+      mentionedWxids: [SMOKE_USERS[1]!.senderId],
+    });
+    await runCommand(expedition, services, {
+      content: "毒奶 @烟测阿光",
+      userIndex: 2,
+      messageTimestampMs,
+      mentionedWxids: [SMOKE_USERS[0]!.senderId],
+    });
+    await runCommand(expedition, services, {
+      content: "我的施法",
+      userIndex: 2,
       messageTimestampMs,
     });
     await runCommand(expedition, services, {
@@ -187,6 +220,16 @@ async function main(): Promise<void> {
     await runScheduledJob(expedition, "expedition.boost-reminder", `${dateKey}T09:40:00.000Z`);
     console.log(`boost reminder sent, messages=${sentMessages.length}`);
 
+    printSection("runRandomEventTick");
+    await services.pluginData.setValue(
+      EXPEDITION_PLUGIN_ID,
+      SMOKE_SESSION_ID,
+      `random-event-plan:${dateKey}`,
+      { dateKey, slots: ["10:00"] },
+    );
+    await runScheduledJob(expedition, "expedition.random-event-tick", `${dateKey}T02:00:00.000Z`);
+    console.log(`random event tick completed, messages=${sentMessages.length}`);
+
     printSection("runDailySettlement");
     await runScheduledJob(expedition, "expedition.daily-settlement", `${dateKey}T09:50:00.000Z`);
     console.log(`settled dateKey=${dateKey}, announcements=${sentMessages.length}`);
@@ -225,6 +268,8 @@ async function main(): Promise<void> {
 
 async function cleanSmokeData(db: PostgresStore["db"]): Promise<void> {
   await db.delete(expeditionReports).where(eq(expeditionReports.sessionId, SMOKE_SESSION_ID));
+  await db.delete(expeditionRandomEvents).where(eq(expeditionRandomEvents.sessionId, SMOKE_SESSION_ID));
+  await db.delete(expeditionCasts).where(eq(expeditionCasts.sessionId, SMOKE_SESSION_ID));
   await db.delete(expeditionRelics).where(eq(expeditionRelics.sessionId, SMOKE_SESSION_ID));
   await db.delete(expeditionEntries).where(eq(expeditionEntries.sessionId, SMOKE_SESSION_ID));
   await db.delete(expeditionPlayers).where(eq(expeditionPlayers.sessionId, SMOKE_SESSION_ID));
@@ -262,9 +307,16 @@ async function runCommand(
     content: string;
     userIndex: number;
     messageTimestampMs: number;
+    mentionedWxids?: string[];
   },
 ): Promise<void> {
-  const context = createContext(input.content, SMOKE_USERS[input.userIndex]!, services, input.messageTimestampMs);
+  const context = createContext(
+    input.content,
+    SMOKE_USERS[input.userIndex]!,
+    services,
+    input.messageTimestampMs,
+    input.mentionedWxids ?? [],
+  );
   const command = findCommand(expedition, input.content);
   if (!command) {
     throw new Error(`远征插件未匹配指令：${input.content}`);
@@ -335,6 +387,7 @@ function createContext(
   user: typeof SMOKE_USERS[number],
   services: PluginServices,
   timestampMs: number,
+  mentionedWxids: string[],
 ): PluginContext {
   const fingerprint = `${SMOKE_SESSION_ID}:${Date.now()}:${user.senderId}:${content}`;
 
@@ -366,6 +419,7 @@ function createContext(
       isSelfSent: false,
       isFromBot: false,
       isMentionBot: false,
+      mentionedWxids,
       fingerprint,
     },
     services,
@@ -391,11 +445,15 @@ async function printBalances(points: DefaultPointsService): Promise<void> {
 async function printDbCounts(db: PostgresStore["db"]): Promise<void> {
   printSection("db counts");
   const entries = await db.select().from(expeditionEntries).where(eq(expeditionEntries.sessionId, SMOKE_SESSION_ID));
+  const casts = await db.select().from(expeditionCasts).where(eq(expeditionCasts.sessionId, SMOKE_SESSION_ID));
+  const randomEvents = await db.select().from(expeditionRandomEvents).where(eq(expeditionRandomEvents.sessionId, SMOKE_SESSION_ID));
   const reports = await db.select().from(expeditionReports).where(eq(expeditionReports.sessionId, SMOKE_SESSION_ID));
   const relics = await db.select().from(expeditionRelics).where(eq(expeditionRelics.sessionId, SMOKE_SESSION_ID));
   const worlds = await db.select().from(expeditionWorlds).where(eq(expeditionWorlds.sessionId, SMOKE_SESSION_ID));
   console.log({
     entries: entries.length,
+    casts: casts.length,
+    randomEvents: randomEvents.length,
     reports: reports.length,
     relics: relics.length,
     worlds: worlds.length,

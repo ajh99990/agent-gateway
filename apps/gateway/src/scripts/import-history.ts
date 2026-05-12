@@ -234,6 +234,7 @@ function normalizeHistoryMessage(
     isSelfSent,
     isFromBot,
     isMentionBot: detectMention(content, botProfile),
+    mentionedWxids: [],
     fingerprint: `${sessionId}:${message.localId}`,
   };
 }

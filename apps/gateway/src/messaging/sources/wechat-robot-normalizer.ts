@@ -136,8 +136,9 @@ function normalizeWechatRobotMessage(
 
   const rawMessageKey = buildMessageKey(input.robotWxid, input.message);
   const contentType = inferWechatRobotContentType(rawMsgType);
+  const mentionedWxids = parseWechatRobotMentionedWxids(input.message.MsgSource);
   const isMentionBot =
-    detectWechatRobotMention(input.message.MsgSource, input.botWechatIds) ||
+    mentionedWxids.some((wxid) => input.botWechatIds.has(wxid)) ||
     detectMention(content, input.botProfile);
 
   return {
@@ -155,6 +156,7 @@ function normalizeWechatRobotMessage(
     isSelfSent,
     isFromBot,
     isMentionBot,
+    mentionedWxids,
     createdAtUnixMs,
     rawPayload: toJsonValue(input.message),
   };
@@ -216,19 +218,20 @@ function buildMessageKey(robotWxid: string, message: WechatRobotRawMessage): str
   ].join(":");
 }
 
-function detectWechatRobotMention(
-  msgSource: string | undefined,
-  botWechatIds: Set<string>,
-): boolean {
+function parseWechatRobotMentionedWxids(msgSource: string | undefined): string[] {
   const atUserList = readXmlTag(msgSource ?? "", "atuserlist");
   if (!atUserList) {
-    return false;
+    return [];
   }
 
-  return atUserList
-    .split(",")
-    .map((item) => item.trim())
-    .some((wxid) => botWechatIds.has(wxid));
+  return Array.from(
+    new Set(
+      atUserList
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean),
+    ),
+  );
 }
 
 function readXmlTag(xml: string, tagName: string): string {
